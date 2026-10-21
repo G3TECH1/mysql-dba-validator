@@ -17,9 +17,10 @@ never runs the SQL you submit.
 **Status: v0.4.1, pre-1.0**, a portable Windows x64 application
 ([release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.4.1)).
 Local database evidence has been verified by the maintainer against a real
-MySQL server; the
-remote/company workflow has not yet been verified against real company
-infrastructure. See [Verification](#verification).
+MySQL server. The maintainer also reports a successful end-to-end test of the
+remote/company workflow against an AWS RDS for MySQL test database; it has not
+yet been verified against real company infrastructure. See
+[Verification](#verification).
 
 v0.4.1 also has an unsigned macOS build for Apple Silicon (ad hoc signed only,
 not notarized). It is built, audited and smoke-tested in CI but has not been
@@ -48,6 +49,24 @@ tested on a real Mac; see
 - **No stored credentials.** MySQL logins are used for one operation and not
   saved.
 - **Portable Windows x64 release**: no installer, no Python needed.
+
+---
+
+## Screenshots
+
+Captured from the v0.4.1 page running locally, with no database connected
+(static analysis only). The SQL and table names are made-up examples.
+
+![Validation results for a DELETE without a WHERE clause: CRITICAL risk, score 100 of 100, LIMITED confidence, the reasons, a DBA review checklist, and the static, database-evidence and metadata panels](docs/images/validator-analysis-results.png)
+
+*Validation results.* A `DELETE` with no `WHERE` clause is rated CRITICAL. The
+result lists why, the review checklist and the points behind the score, and
+the evidence panels say plainly that no database evidence was collected.
+
+![The main page: MySQL connection and remote-target pairing on the left, the SQL input with the Validate SQL button on the right](docs/images/validator-main-interface.png)
+
+*Main page.* Connection settings and connector pairing on the left; paste up
+to 16 statements on the right and choose **Validate SQL**.
 
 ---
 
@@ -226,8 +245,12 @@ are in [SECURITY.md](SECURITY.md).
   publishing.
 - **Real MySQL:** local database evidence was verified by the maintainer
   against a real MySQL server with the Sakila sample database.
-- **Not verified:** remote/company MySQL, VPN/LAN connectivity and company TLS,
-  and the positive M1 metadata adjustment against a live large table.
+- **Remote workflow (maintainer-reported):** after the v0.4.1 release, the
+  maintainer reported a successful end-to-end test on Windows against an AWS
+  RDS for MySQL test database. No transcript is recorded, and it does not cover
+  other MySQL versions, network setups or error paths.
+- **Not verified:** real company MySQL, VPN/LAN connectivity and company-issued
+  TLS, and the positive M1 metadata adjustment against a live large table.
 
 The detailed matrix, including what each check covers, is in
 [VERIFICATION.md](VERIFICATION.md).

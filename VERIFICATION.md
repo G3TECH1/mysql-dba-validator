@@ -17,7 +17,12 @@ of verification apart and lists what has **not** been verified.
 A test at one level is not evidence for a higher one. A fake MySQL that models
 MySQL's behaviour is not a real MySQL server.
 
-## Current status (v0.4.0)
+Each result also says where it comes from: CI (a workflow run with logs), a
+maintainer run whose results were recorded, or a manual test reported by the
+maintainer without a recorded transcript. A reported test is weaker evidence
+than a recorded one.
+
+## Current status
 
 | Area | Status |
 | --- | --- |
@@ -26,7 +31,8 @@ MySQL's behaviour is not a real MySQL server.
 | Local web app and connector together in a browser | Real headless Chrome, with company MySQL replaced by a stand-in |
 | Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip; the published v0.4.0 zip re-verified by the maintainer (below) |
 | Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below). Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
-| Remote/company MySQL, VPN/LAN connectivity, company TLS, hosted HTTPS frontend | **Not verified** |
+| Remote/company workflow (local connector) end to end against a real MySQL server | **Reported by the maintainer** (manual test, recorded after the v0.4.1 release): successful on Windows against an AWS RDS for MySQL test database the maintainer created. No transcript or logs were provided for this record; see [below](#remote-workflow-against-aws-rds-for-mysql-maintainer-reported) |
+| Real company MySQL, VPN/LAN connectivity, company-issued TLS, hosted HTTPS frontend | **Not verified** |
 | Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan, which only the remote connector path collects. Automated tests only |
 
 ## Automated test suite
@@ -138,12 +144,42 @@ exercised:
 - the evidence display in the page;
 - credential handling (no leakage).
 
+## Remote workflow against AWS RDS for MySQL (maintainer-reported)
+
+Recorded on 2026-10-21, after the v0.4.1 release; it was not part of the
+v0.4.1 release verification.
+
+The maintainer created a test database in AWS RDS for MySQL and reports that
+the remote/company workflow, which goes through the local connector to an
+approved target, was tested successfully end to end on Windows.
+
+| | |
+| --- | --- |
+| Evidence source | Manual test reported by the maintainer. No transcript, logs or screenshots were provided for this record, so it cannot be re-checked from this repository |
+| Client | Windows. The validator version and whether the packaged Console executable or a source checkout was used were not recorded |
+| Database | AWS RDS for MySQL, a test database created by the maintainer. The MySQL version, region, instance settings, network path and account privileges were not recorded |
+| TLS | The connector refuses a company connection without a configured CA and verifies the certificate and host name (`connector/server.py`), so a successful run implies verified TLS. Which CA bundle was used was not recorded |
+| Outcome | Successful, as reported |
+
+What it does not establish:
+
+- other MySQL versions, MySQL-compatible services or Aurora;
+- real company infrastructure: company MySQL servers, VPN/LAN connectivity,
+  company-issued CAs, proxies or firewalls;
+- particular IAM, security-group, network or MySQL privilege configurations;
+- which evidence was collected for each statement type, including remote
+  `UPDATE`/`DELETE` plans and the positive M1 and M2 adjustments;
+- error paths against RDS (rejected logins, unreachable targets, DNS changes,
+  certificate failures) and behaviour under production workloads.
+
 ## Not verified
 
-- Remote/company MySQL through the connector, VPN/LAN connectivity, company
-  TLS, and a hosted HTTPS frontend. The connector's security rules are covered
-  by automated tests and its process has been run locally with a stand-in
-  target, but not against real company infrastructure.
+- Remote/company workflow against real company infrastructure: company MySQL,
+  VPN/LAN connectivity, company-issued TLS, and a hosted HTTPS frontend. The
+  connector's security rules are covered by automated tests, its process has
+  been run locally with a stand-in target, and the maintainer reports one
+  successful end-to-end test against an AWS RDS for MySQL test database
+  (above).
 - Remote `UPDATE`/`DELETE` plans and the positive M1 and M2 adjustments
   against a live database.
 - Platforms other than Windows x64 on a real machine. The v0.4.1 macOS (Apple
