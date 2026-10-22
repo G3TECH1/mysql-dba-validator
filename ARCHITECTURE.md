@@ -130,7 +130,7 @@ and it is not a privilege. Neither control has been tested against a real
 server for stored-function behaviour. Because write plans are never requested,
 the evidence account never needs `UPDATE` or `DELETE`. Until v0.4.1 the company
 connection had no read-only session and requested `UPDATE`/`DELETE` plans;
-the main branch no longer does (see
+v0.5.0 no longer does (see
 [docs/v2-database-evidence-contract.md](docs/v2-database-evidence-contract.md)).
 
 ## Risk scoring
@@ -187,7 +187,7 @@ the main branch no longer does (see
   that the text contains a data-changing statement. `statement_type` stays
   `DESCRIBE`.
 - **Bounded `EXPLAIN` adjustments** (only for a collected one-row plan, for
-  `UPDATE`/`DELETE` and, on the main branch, for a `SELECT`; with `LIMIT`, the
+  `UPDATE`/`DELETE` and, since v0.5.0, for a `SELECT`; with `LIMIT`, the
   row-estimate rule only when the plan shows `Using filesort` or `Using temporary`;
   never for a statement already `CRITICAL`):
   - +10 when `EXPLAIN` indicates a full table scan;
@@ -207,7 +207,7 @@ the main branch no longer does (see
     than 10,000 rows for a large table).
   - **M2** — one table, a direct `column = literal` predicate on it, and
     index statistics showing no index whose leading column is that column.
-    On the main branch it also applies to a `SELECT`; the page calls it
+    Since v0.5.0 it also applies to a `SELECT`; the page calls it
     "Filter and index assessment".
 
   M1 depends on a collected `UPDATE`/`DELETE` plan, which is not requested, so
@@ -256,7 +256,7 @@ evidence unavailable", does not by itself mean the connection failed
 (`connection.state` says that). Local and remote results use the same states
 with the same meaning; only how evidence is collected differs.
 
-Each statement result also carries (main branch, after v0.4.1):
+Each statement result also carries (since v0.5.0):
 
 | Field | Meaning |
 | --- | --- |

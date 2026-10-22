@@ -14,17 +14,20 @@ decisions.
 It supports a DBA's judgement. It does not guarantee that SQL is safe, and it
 never runs the SQL you submit.
 
-**Status: v0.4.1, pre-1.0**, a portable Windows x64 application
-([release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.4.1)).
-Local database evidence has been verified by the maintainer against a real
-MySQL server. The maintainer also reports a successful end-to-end test of the
-remote/company workflow against an AWS RDS for MySQL test database; it has not
-yet been verified against real company infrastructure. See
-[Verification](#verification).
+**Status: v0.5.0, pre-1.0**, a portable Windows x64 application
+([release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.0)).
+v0.5.0 changes how evidence, risk and confidence relate and how batches are
+validated (see [Changes in v0.5.0](#changes-in-v050)). These changes are
+covered by automated tests only; they have not been validated against a live
+MySQL server. On earlier code, local database evidence was verified by the
+maintainer against a real MySQL server, and the maintainer reports a
+successful end-to-end test of the remote/company workflow (v0.4.1) against an
+AWS RDS for MySQL test database. Nothing has been verified against real
+company infrastructure. See [Verification](#verification).
 
-v0.4.1 also has an unsigned macOS build for Apple Silicon (ad hoc signed only,
-not notarized). It is built, audited and smoke-tested in CI but has not been
-tested on a real Mac; see
+An unsigned macOS build for Apple Silicon (ad hoc signed only, not notarized)
+is built, audited and smoke-tested in CI for each release since v0.4.1 but has
+not been tested on a real Mac; see
 [VERIFICATION.md](VERIFICATION.md#macos-apple-silicon-v041-unsigned-not-yet-verified-on-a-mac).
 
 ---
@@ -74,13 +77,13 @@ to 16 statements on the right and choose **Validate SQL**.
 
 ### 1. Download and verify
 
-1. From the [v0.4.1 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.4.1),
-   download `MySQL-DBA-Validator-v0.4.1-windows-x64.zip` and the matching
+1. From the [v0.5.0 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.0),
+   download `MySQL-DBA-Validator-v0.5.0-windows-x64.zip` and the matching
    `.sha256` file.
 2. Verify the download in PowerShell:
 
    ```powershell
-   Get-FileHash .\MySQL-DBA-Validator-v0.4.1-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\MySQL-DBA-Validator-v0.5.0-windows-x64.zip -Algorithm SHA256
    ```
 
    The result must match the SHA256 shown on the release page and in the
@@ -244,7 +247,8 @@ are in [SECURITY.md](SECURITY.md).
   installed. The published v0.4.0 zip was re-verified by the maintainer before
   publishing.
 - **Real MySQL:** local database evidence was verified by the maintainer
-  against a real MySQL server with the Sakila sample database.
+  against a real MySQL server with the Sakila sample database, on code before
+  v0.5.0. The v0.5.0 changes have not been checked against a live server.
 - **Remote workflow (maintainer-reported):** after the v0.4.1 release, the
   maintainer reported a successful end-to-end test on Windows against an AWS
   RDS for MySQL test database. No transcript is recorded, and it does not cover
@@ -255,10 +259,11 @@ are in [SECURITY.md](SECURITY.md).
 The detailed matrix, including what each check covers, is in
 [VERIFICATION.md](VERIFICATION.md).
 
-### Changes on main after v0.4.1 (not yet released)
+### Changes in v0.5.0
 
-The main branch revises how evidence, risk and confidence relate. The v0.4.1
-download does not include these changes.
+v0.5.0 revises how evidence, risk and confidence relate, and how a batch of
+statements is validated. These changes are covered by automated tests only;
+the live MySQL validation plan has not been run.
 
 - A `WHERE` clause, or a column named `id` or `*_id`, no longer lowers a
   write's risk. Only a primary key or unique index confirmed from table
@@ -279,6 +284,21 @@ download does not include these changes.
 - Execution plans are requested only for a `SELECT` whose function calls are
   all on a reviewed list of MySQL built-ins. Row scope says that triggers and
   foreign-key actions were not checked.
+- Up to 16 statements per request. Each statement says whether it was
+  analysed: SQL that MySQL would reject is "not valid MySQL"; valid statements
+  the validator does not analyse (`VALUES`, `TABLE`, `HANDLER`, a stored
+  program definition) are "not analysed"; SQL the parser cannot read is
+  "could not be read", never "invalid". None of these is ever scored as low
+  risk.
+- Empty or comment-only input is refused instead of being reported as a
+  low-risk batch. `DELIMITER` scripts, and stored program definitions with a
+  multi-statement body or mixed with other statements, are refused: they
+  cannot be split into statements reliably. `CALL` never reports what the
+  procedure does.
+- Known limitation: a statement the parser could read only partly is scored
+  from what was read, with `LOW` confidence and a warning. A partly read
+  `SELECT` can show `LOW` risk, and a write is at least `MEDIUM`, but a clause
+  the parser dropped is not assessed.
 
 The full contract is in
 [docs/v2-database-evidence-contract.md](docs/v2-database-evidence-contract.md).
@@ -377,7 +397,7 @@ Build a release locally:
 
 ```powershell
 python release\build_windows.py
-python release\smoke_test_artifact.py dist\MySQL-DBA-Validator-v0.4.1-windows-x64.zip
+python release\smoke_test_artifact.py dist\MySQL-DBA-Validator-v0.5.0-windows-x64.zip
 ```
 
 The full process, including tagging and GitHub Releases, is in

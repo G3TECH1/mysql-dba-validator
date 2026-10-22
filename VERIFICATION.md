@@ -30,11 +30,11 @@ than a recorded one.
 | Results page rendering of every evidence state | Real headless Chrome, driven by real API responses (part of the test suite) |
 | Local web app and connector together in a browser | Real headless Chrome, with company MySQL replaced by a stand-in |
 | Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip; the published v0.4.0 zip re-verified by the maintainer (below) |
-| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below). Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
+| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
 | Remote/company workflow (local connector) end to end against a real MySQL server | **Reported by the maintainer** (manual test, recorded after the v0.4.1 release): successful on Windows against an AWS RDS for MySQL test database the maintainer created. No transcript or logs were provided for this record; see [below](#remote-workflow-against-aws-rds-for-mysql-maintainer-reported) |
 | Real company MySQL, VPN/LAN connectivity, company-issued TLS, hosted HTTPS frontend | **Not verified** |
-| Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan. In v0.4.1 only the remote connector path collected one; on main neither path does (see below), so M1 does not arise in practice. Automated tests only |
-| Evidence contract revision (main, after v0.4.1, unreleased) | Automated tests only; no live-server check has been run. See [below](#evidence-contract-revision-main-after-v041-unreleased) |
+| Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan. In v0.4.1 only the remote connector path collected one; since v0.5.0 neither path does (see below), so M1 does not arise in practice. Automated tests only |
+| Evidence contract revision and batch contract (v0.5.0) | Automated tests only; no live-server check has been run. See [below](#evidence-contract-revision-v050) |
 
 ## Automated test suite
 
@@ -185,11 +185,12 @@ What it does not establish:
 - error paths against RDS (rejected logins, unreachable targets, DNS changes,
   certificate failures) and behaviour under production workloads.
 
-## Evidence contract revision (main, after v0.4.1, unreleased)
+## Evidence contract revision (v0.5.0)
 
 The changes in
 [docs/v2-database-evidence-contract.md](docs/v2-database-evidence-contract.md)
-are in the main working tree, not in a release. The live checks marked
+are released in v0.5.0 with automated tests only (1313 passed, 4 skipped, on
+Windows before the release). The live checks marked
 **Not run** below are written up as cases, with fixtures, expected results and
 cleanup, in
 [docs/v2-live-mysql-validation-plan.md](docs/v2-live-mysql-validation-plan.md).
@@ -242,11 +243,11 @@ section 2); no wider Performance Schema grant is to be used.
   been run locally with a stand-in target, and the maintainer reports one
   successful end-to-end test against an AWS RDS for MySQL test database
   (above).
-- The positive M1 and M2 adjustments against a live database (on main they
+- The positive M1 and M2 adjustments against a live database (since v0.5.0 they
   need an `UPDATE`/`DELETE` plan, which is no longer requested).
 - Every live-server check of the evidence contract revision (below).
-- Platforms other than Windows x64 on a real machine. The v0.4.1 macOS (Apple
-  Silicon) unsigned zip has been tested only in CI; see below.
+- Platforms other than Windows x64 on a real machine. The macOS (Apple
+  Silicon) unsigned zips (v0.4.1, v0.5.0) have been tested only in CI; see below.
 
 ## macOS (Apple Silicon), v0.4.1 unsigned: not yet verified on a Mac
 
