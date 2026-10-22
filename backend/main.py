@@ -43,7 +43,7 @@ from .risk_engine import (
     weakest_confidence,
 )
 from .analyzer import analyze_batch
-from .parser import parse_sql, unsupported_script
+from .parser import has_executable_comment, parse_sql, unsupported_script
 from .version import APP_VERSION
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from fastapi.staticfiles import StaticFiles
@@ -130,12 +130,17 @@ def script_error(sql: str, all_facts: list) -> str | None:
     statements reliably; None when its statements can be assessed one by one.
     Shared by local /api/validate and the connector's remote validate.
 
+    - "executable_comment_not_supported": an executable comment ("/*! ... */"), whose
+      contents MySQL runs but the parser reads as a comment. Checked first: a script
+      whose only statement is in such a comment is not "no_statements".
     - "no_statements": empty, whitespace-only or comment-only input. There is nothing
       to assess, so no risk level or confidence is returned (never "LOW").
     - "delimiter_not_supported" / "stored_program_not_supported": see
       backend.parser.unsupported_script.
     - "statement_limit_exceeded": more than MAX_STATEMENTS statements.
     """
+    if has_executable_comment(sql):
+        return "executable_comment_not_supported"
     if not all_facts:
         return "no_statements"
     unsupported = unsupported_script(sql)

@@ -514,18 +514,29 @@ confidence and `analysis_text_differs: true` (unchanged; see 17).
 **Whole request refused.** Local `/api/validate` returns HTTP 200
 `{"error": code}` (as for `statement_limit_exceeded`); the connector returns
 HTTP 400 with `error_code`. No statements, no risk level and no confidence are
-returned, and no database connection is used for evidence.
+returned, and no database connection is used for evidence. The connector
+decides these refusals before it opens a connection to the target.
 
 | Code | When |
 | --- | --- |
+| `executable_comment_not_supported` | An executable comment (`/*! … */`, `/*!50000 … */`) outside strings, quoted identifiers and ordinary comments. MySQL runs its contents as SQL, but the parser would read it as a comment, so SQL inside it would be neither counted nor scored. The user must remove the comment or move its SQL out; the edited SQL, not the original script, is then assessed. Checked with and without backslash escapes in strings (the server's `NO_BACKSLASH_ESCAPES` mode is unknown), so a string containing `\'` followed by `/*!` text is also refused. |
 | `no_statements` | Empty, whitespace-only or comment-only input (previously 200 with 0 statements, `overall_risk_level` LOW). |
 | `delimiter_not_supported` | A line starting with `DELIMITER`: a mysql client command, not SQL, that changes where statements end. |
 | `stored_program_not_supported` | A stored program definition together with other statements, or with a multi-statement body (`BEGIN … ; … END`): splitting on `;` would read body fragments as statements. |
 | `statement_limit_exceeded` | More than 16 statements (unchanged). |
 
-Order: `no_statements`, then the script checks, then the statement limit
-(`main.script_error`, shared by both paths). Semicolons and keywords inside
-strings and comments are never boundaries (tokenizer-based).
+Order: `executable_comment_not_supported`, then `no_statements`, then the
+script checks, then the statement limit (`main.script_error`, shared by both
+paths). Semicolons and keywords inside strings and comments are never
+boundaries (tokenizer-based).
+
+**`--`** starts a comment only when followed by whitespace, a control
+character or the end of the input, as in MySQL; otherwise it is read as two
+minus signs (`balance--1` is `balance - -1`, and a statement after it is not
+hidden). `parser.mysql_minus_signs` inserts a space between such a pair before
+parsing. A statement the parser then cannot read (for example a line of
+dashes, which MySQL also rejects) is `unreadable`, never a crash; its
+displayed text shows the inserted space.
 
 **`CALL`** is analysed as the call only: base risk 10, LIMITED confidence, the
 finding "Stored procedure behavior cannot be fully determined from the CALL
@@ -535,7 +546,10 @@ procedure's body is never read or reported.
 Tests: `tests/test_batch_contract.py`, `tests/test_batch_validation.py`,
 `test_remote_scripts_without_assessable_statements_are_refused`,
 `test_statements_table_says_why_a_statement_was_not_analysed`,
-`test_batch_contract_errors_have_the_same_message_locally_and_remotely`.
+`test_batch_contract_errors_have_the_same_message_locally_and_remotely`,
+`test_executable_comments_are_refused`,
+`test_double_minus_before_a_non_space_is_two_minus_signs`,
+`test_executable_comment_is_refused_before_any_submitted_text_is_sent`.
 
 ## 11. Security and operational boundaries
 
@@ -734,6 +748,12 @@ repository, so none was run.
   parser drops a clause that widens a write's scope, the write shows MEDIUM
   where a full reading might give HIGH or CRITICAL. LOW confidence and the
   "read partly" warning are the only signals; review the submitted text.
+- **Comments (10.6):** executable comments are refused, not analysed, which
+  also refuses valid scripts such as `mysqldump` output. The comment scan
+  follows MySQL's rules for strings, quoted identifiers and comments but is
+  not a MySQL lexer: MariaDB `/*M! … */` is an ordinary comment here, `#` and
+  `--` comments end only at a line feed, and outside the executable-comment
+  check the tokenizer assumes backslash escapes in strings.
 - The stored-program checks read tokens, not stored-program grammar: a
   definition is recognised by `CREATE [DEFINER = account] PROCEDURE | FUNCTION
   | TRIGGER | EVENT`; a line starting with the word `delimiter` is always read

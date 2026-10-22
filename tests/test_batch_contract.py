@@ -197,7 +197,125 @@ def test_refusals_are_decided_before_any_database_connection(monkeypatch):
         raise AssertionError("no connection may be opened for a refused script")
 
     monkeypatch.setattr(main, "open_evidence_connection", no_connection)
-    for sql in ("-- nothing", "DELIMITER //", "CREATE PROCEDURE p() BEGIN DELETE FROM t; END"):
+    for sql in ("-- nothing", "DELIMITER //", "CREATE PROCEDURE p() BEGIN DELETE FROM t; END",
+                "SELECT 1; /*!50000 DELETE FROM t */"):
         body = {"sql": sql, "host": "127.0.0.1", "username": "u", "password": "p", "database": "d"}
         response = client.post("/api/validate", json=body)
         assert response.status_code == 200 and "error" in response.json()
+
+
+# ---------------------------------------------------------------- MySQL comment rules
+# MySQL runs the contents of an executable comment (/*! ... */), and reads "--" as a
+# comment only before whitespace, a control character or the end of the input
+# (MySQL manual, "Comments"). sqlglot keeps every /* */ as a comment and reads every
+# "--" as one, so either could hide SQL that MySQL runs.
+
+EXECUTABLE_COMMENT = {"error": "executable_comment_not_supported"}
+
+
+@pytest.mark.parametrize("sql", [
+    # A hidden write after an ordinary statement: was one SELECT, LOW 0, HIGH confidence.
+    "SELECT id FROM customers WHERE id = 1;\n/*!50000 DELETE FROM customers */;",
+    # The only statement is in the comment: was "no_statements".
+    "/*!50000 DELETE FROM customers */",
+    "/*! DROP TABLE customers */;",
+    # A predicate or an assignment widened inside the comment: was MEDIUM.
+    "DELETE FROM orders WHERE id = 1 /*!50000 OR 1 = 1 */",
+    "UPDATE orders SET status = 'x' /*!50000 , total = 0 */ WHERE id = 1",
+    # After a string with comment-like text, and after a quoted identifier.
+    "SELECT '/* not a comment */' FROM t /*!50000 , (SELECT 1) */",
+    "SELECT `a``b` FROM t /*!80000 FOR UPDATE */",
+])
+def test_executable_comments_are_refused(sql):
+    assert validate(sql) == EXECUTABLE_COMMENT
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT '/*!50000 DELETE FROM t */' FROM t WHERE id = 1",
+    "SELECT 'it''s /*!50000 DELETE FROM t */' FROM t WHERE id = 1",
+    'SELECT "/*! DELETE FROM t */" FROM t WHERE id = 1',
+    "SELECT `/*!x*/` FROM t WHERE id = 1",
+    "SELECT id FROM t /* ordinary comment */ WHERE id = 1",
+    "SELECT id FROM t /* comments do not nest /*! not run */ WHERE id = 1",
+    "SELECT id FROM t # /*! in a line comment */\nWHERE id = 1",
+    "SELECT id FROM t -- /*! in a line comment */\nWHERE id = 1",
+    "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id FROM t WHERE id = 1",
+])
+def test_comment_like_text_that_mysql_does_not_run_is_analysed(sql):
+    statement = only(sql)
+    assert (statement["statement_type"], statement["analysis_status"]) == ("SELECT", "analysed")
+
+
+def test_executable_comment_check_assumes_neither_backslash_mode():
+    from backend.parser import has_executable_comment
+
+    # With backslash escapes the comment is inside the string; under the
+    # NO_BACKSLASH_ESCAPES SQL mode the string ends at the backslash and MySQL would run
+    # the comment. The server's mode is not known, so it is reported.
+    assert has_executable_comment("SELECT 'a\\'b /*!50000 c */' FROM t")
+    assert not has_executable_comment("SELECT 'it''s /*!50000 c */' FROM t")
+    assert not has_executable_comment("SELECT 1 /* a /*! b */")
+
+
+def score(statement: dict) -> tuple:
+    return (statement["statement_type"], statement["risk_level"], statement["score"],
+            statement["confidence"], statement["has_where"])
+
+
+def test_double_minus_before_a_non_space_is_two_minus_signs():
+    # Was read as a comment from "--1": the WHERE vanished and a one-row UPDATE was
+    # CRITICAL ("no WHERE clause") with HIGH confidence.
+    statement = only("UPDATE accounts SET balance = balance--1 WHERE id = 1")
+    assert statement["sql"] == "UPDATE accounts SET balance = balance - -1 WHERE id = 1"
+    assert statement["analysis_status"] == "analysed" and statement["has_where"] is True
+    assert score(statement) == score(only("UPDATE accounts SET balance = balance - -1 WHERE id = 1"))
+
+
+def test_a_statement_after_double_minus_is_not_hidden():
+    # Was one UPDATE: the ";" and the DELETE after "--1" were inside the "comment".
+    data = validate("UPDATE accounts SET balance = balance--1;\nDELETE FROM accounts;")
+    assert data["statement_count"] == 2
+    assert [score(s)[:2] for s in data["statements"]] == [("UPDATE", "CRITICAL"), ("DELETE", "CRITICAL")]
+    assert data["statements"][1]["sql"] == "DELETE FROM accounts"
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT id FROM t WHERE id = 1 -- a comment; DELETE FROM t",
+    "SELECT id FROM t WHERE id = 1 --\ta comment after a tab; DELETE FROM t",
+    "SELECT id FROM t WHERE id = 1 --",
+    "SELECT id FROM t WHERE id = 1 --\nAND 1 = 1",
+])
+def test_double_minus_before_whitespace_is_still_a_comment(sql):
+    statement = only(sql)
+    assert (statement["statement_type"], statement["analysis_status"]) == ("SELECT", "analysed")
+
+
+def test_minus_sign_rewrite_leaves_strings_identifiers_and_comments_alone():
+    from backend.parser import mysql_minus_signs
+
+    sql = "SELECT a--1, 'x--y', `p--q`, \"r--s\" FROM t /* u--v */ # w--z"
+    assert mysql_minus_signs(sql) == sql.replace("a--1", "a- -1", 1)
+    assert mysql_minus_signs("SELECT 5---1") == "SELECT 5- - -1"
+    assert mysql_minus_signs("SELECT 1 -- note--x") == "SELECT 1 -- note--x"
+    assert only("UPDATE t SET note = 'a--b' WHERE id = 1")["sql"] == "UPDATE t SET note = 'a--b' WHERE id = 1"
+
+
+@pytest.mark.parametrize("sql", [
+    # A line of dashes is minus signs to MySQL, which rejects it; sqlglot cannot write
+    # back what it reads there, and that was an HTTP 500 (also with the spaces typed).
+    "----------\nSELECT id FROM t WHERE id = 1",
+    "- -",
+    "SELECT - - - - FROM t",
+])
+def test_minus_signs_the_parser_cannot_read_are_not_analysed(sql):
+    assert_not_analysed(only(sql), "unreadable")
+
+
+def test_a_write_after_a_line_of_dashes_is_never_reported_as_low_risk():
+    data = validate("SELECT id FROM t WHERE id = 1;\n----------\nDELETE FROM t;")
+    assert data["statement_count"] == 2 and data["overall_risk_level"] == "CRITICAL"
+    hidden = data["statements"][1]
+    assert hidden["analysis_status"] in {"invalid", "unreadable"} and "DELETE FROM t" in hidden["sql"]
+    assert_not_analysed(hidden, hidden["analysis_status"])
+    # "-- " with a space is still a comment.
+    assert only("-- ------ section ------\nSELECT id FROM t WHERE id = 1")["analysis_status"] == "analysed"

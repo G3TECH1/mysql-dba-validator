@@ -389,28 +389,42 @@ def test_connection_and_request_failures_remain_real_http_errors(monkeypatch):
     assert mismatch.status_code == 400 and mismatch.json()["error_code"] == "dns_identity_mismatch"
 
     too_many = ";".join(["SELECT 1"] * 17)
-    runtime2, _ = remote_runtime(monkeypatch, FakeServer())
+    runtime2, connects2 = remote_runtime(monkeypatch, FakeServer())
     client2, headers2 = paired_client(runtime2)
     limited = client2.post("/company/targets/t1/validate", headers=headers2, json={"sql": too_many, **login()})
     assert limited.status_code == 400 and limited.json()["error_code"] == "statement_limit_exceeded"
+    assert connects2 == []
 
 
 @pytest.mark.parametrize("sql, code", [
     ("-- only a comment", "no_statements"),
     ("DELIMITER //\nCREATE PROCEDURE p() BEGIN DELETE FROM t; END //\nDELIMITER ;", "delimiter_not_supported"),
     ("SELECT 1; CREATE PROCEDURE p() BEGIN DELETE FROM t; END", "stored_program_not_supported"),
+    ("SELECT id FROM users WHERE id = 1;\n/*!50000 DELETE FROM users */;", "executable_comment_not_supported"),
+    ("DELETE FROM users WHERE id = 1 /*!50000 OR 1 = 1 */", "executable_comment_not_supported"),
 ])
 def test_remote_scripts_without_assessable_statements_are_refused(monkeypatch, sql, code):
     # Same batch contract as local /api/validate, as the connector's 400 error shape;
-    # never a LOW-risk result. Nothing is explained on the target.
+    # never a LOW-risk result. Refused before any connection to the target is opened.
     server = FakeServer()
-    runtime, _ = remote_runtime(monkeypatch, server)
+    runtime, connects = remote_runtime(monkeypatch, server)
     client, headers = paired_client(runtime)
     refused = client.post("/company/targets/t1/validate", headers=headers, json={"sql": sql, **login()})
     assert refused.status_code == 400 and refused.json()["error_code"] == code
     assert "statements" not in refused.json()
-    assert not any("EXPLAIN" in str(sql).upper() or "INFORMATION_SCHEMA" in str(sql).upper()
-                   for sql in server.executed)
+    assert connects == []
+    assert server.executed == []
+
+
+def test_remote_double_minus_is_read_as_mysql_reads_it(monkeypatch):
+    # "--" before a non-space is two minus signs in MySQL: the DELETE after it is a
+    # statement of its own, not part of a comment.
+    response, _ = remote_validate(monkeypatch, FakeServer(),
+                                  "UPDATE users SET n = n--1;\nDELETE FROM users;")
+    assert response.status_code == 200, response.text
+    statements = response.json()["statements"]
+    assert [(s["statement_type"], s["risk_level"]) for s in statements] == [
+        ("UPDATE", "CRITICAL"), ("DELETE", "CRITICAL")]
 
 
 # ---------------------------------------------------------------- remote database selection

@@ -26,10 +26,10 @@ than a recorded one.
 
 | Area | Status |
 | --- | --- |
-| Parser, risk engine, scoring adjustments, API, evidence contract, connector security rules | Automated tests: 770 passed, 0 skipped (maintainer run at the v0.4.0 release commit; the CI tag run also passed the suite). |
+| Parser, risk engine, scoring adjustments, API, evidence contract, connector security rules | Automated tests at v0.5.0: 1313 passed, 4 skipped on the maintainer's Windows machine (Python 3.13.5) before tagging; in the v0.5.0 tag runs (Python 3.14), 1315 passed, 2 skipped on Windows and 1316 passed, 1 skipped on macOS. See [below](#v050-release-verification) |
 | Results page rendering of every evidence state | Real headless Chrome, driven by real API responses (part of the test suite) |
 | Local web app and connector together in a browser | Real headless Chrome, with company MySQL replaced by a stand-in |
-| Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip; the published v0.4.0 zip re-verified by the maintainer (below) |
+| Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip. The published v0.5.0 zip's checksum and smoke test were re-checked on the maintainer's machine; its artifact audit ran in CI only (below) |
 | Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
 | Remote/company workflow (local connector) end to end against a real MySQL server | **Reported by the maintainer** (manual test, recorded after the v0.4.1 release): successful on Windows against an AWS RDS for MySQL test database the maintainer created. No transcript or logs were provided for this record; see [below](#remote-workflow-against-aws-rds-for-mysql-maintainer-reported) |
 | Real company MySQL, VPN/LAN connectivity, company-issued TLS, hosted HTTPS frontend | **Not verified** |
@@ -107,6 +107,47 @@ locally.
    and that the program folder is never written to.
 6. The zip and its `.sha256` are attached to a **draft** release, which a
    maintainer verifies and publishes by hand ([RELEASING.md](RELEASING.md)).
+
+## v0.5.0 release verification
+
+All from tag `v0.5.0`, commit `86eb2994b885e9c573e710148f10c04564c47ead`.
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Full test suite and `pip check` before tagging | 1313 passed, 4 skipped; `pip check` clean | Maintainer's Windows 10 machine, Python 3.13.5 (the project targets 3.14) |
+| Windows tag run (39752902851) | Tests 1315 passed, 2 skipped; artifact audit passed on the folder and the zip (119 files, 2184 embedded modules); smoke test 55/55 | CI, Python 3.14 |
+| macOS tag run (39752902827) | Tests 1316 passed, 1 skipped (the job fails on any skip other than the Windows Job Object test); app and zip audits passed; smoke test 49/49; unsigned zip uploaded by `publish-unsigned` | CI, GitHub-hosted Apple Silicon runner, Python 3.14 |
+| Published Windows zip | Downloaded from the draft release: 32,931,962 bytes, SHA256 `929b20f3d3eb8fe2a6be7c0948a5d317bc3c17299ffdab50e50cadf0d6467c0a`, matching its `.sha256` file and the CI build log; smoke test 55/55 | Maintainer's machine |
+| Published macOS zip | SHA256 `12259af89d8b931f5b78e3b7111376786e56f6a2dfe928b5f980d7cefba1bbd6` agrees in its `.sha256` file, GitHub's asset digest and the CI log. The zip itself was not downloaded or run outside CI | Maintainer's machine (checksums only) |
+
+Not done for v0.5.0:
+
+- the artifact audit of the published zip on the maintainer's machine
+  (PyInstaller, which the audit needs, is not installed there; the CI audit
+  passed);
+- the packaged real-Chrome and credential-boundary checks that were run for
+  v0.4.0 (below);
+- any check against a live MySQL server (see
+  [Evidence contract revision](#evidence-contract-revision-v050)).
+
+## Unreleased: comment-parsing fix (working tree, not a release)
+
+Uncommitted changes on top of `v0.5.0`, 2026-10-22: executable comments
+(`/*! ... */`) are refused (`executable_comment_not_supported`), and `--`
+before anything other than whitespace or a control character is read as two
+minus signs, as MySQL reads it. The connector now decides every whole-request
+refusal before opening a connection to the target. These results are not
+release results; none of this is in a published build.
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Full test suite and `pip check` | 1344 passed, 4 skipped; `pip check` clean | Maintainer's Windows 10 machine, Python 3.13.5 (the project targets 3.14), sqlglot 30.17.0 (installed) |
+| Focused files (batch contract, connector remote evidence, no submitted SQL, local evidence credentials, evidence contract, served page) | 291 passed with sqlglot 30.17.0 and 291 passed with 30.21.0 (the release pin, loaded from a scratch directory) | Same machine |
+| New and changed tests against the code before the fix | 21 fail, plus 4 that end in HTTP 500 (`- -` and similar input crashed the parser's SQL writer in v0.5.0) | Same machine; a scratch copy of `v0.5.0` with the new tests |
+| Refusal before connection, against the v0.5.0 connector order | 7 fail (a connection was opened before refusing) | Same machine; a scratch copy with only `connector/server.py` from `v0.5.0` |
+
+All of this uses fake connections and TestClient. No CI run, packaged build or
+live MySQL server has checked these changes.
 
 ## v0.4.0 release verification
 
@@ -224,7 +265,7 @@ section 2); no wider Performance Schema grant is to be used.
 | Row-scope acceptance tests (W1–W12) | 59 passed | Same; fake MySQL with explicit schema metadata |
 | Read-only boundary tests | 49 passed | Same; fake MySQL. Every `EXPLAIN` sent must pass the final check and the function list |
 | Real-Chrome rendering of scope, headlines, warnings and batch confidence | Passed | Same, Google Chrome headless |
-| CI tag run, packaged build, audit, smoke test | **Not run** | No release was built; the build needs Python 3.14 |
+| CI tag run, packaged build, audit, smoke test | Passed in the v0.5.0 tag runs (2026-10-22) | CI, Python 3.14; see [v0.5.0 release verification](#v050-release-verification) |
 | `SET SESSION TRANSACTION READ ONLY` then `@@SESSION.transaction_read_only` = 1 on MySQL 8.4 | **Not run** | No authorized 8.4 test server |
 | `EXPLAIN UPDATE`/`DELETE` refused with error 1792 on a read-only session, 8.4 | **Not run** | v0.3.0's maintainer test observed it on a server whose version was not recorded |
 | Unique, composite, prefix and nullable-unique index metadata on 8.4 | **Not run** | |
@@ -262,7 +303,7 @@ These are separate stages; each is reached only when it has actually happened.
 | 5. Signed with a Developer ID | **Not yet** (needs an Apple Developer account; not planned until resources allow) |
 | 6. Notarized by Apple | **Not yet** |
 | 7. Accepted by Gatekeeper on a real Mac | **Not yet** |
-| 8. Published as a release | Yes: v0.4.1, the unsigned zip only (ad hoc signed, not notarized), uploaded by the workflow's `publish-unsigned` job from the tag run after its build, audits and smoke test passed |
+| 8. Published as a release | Yes: v0.4.1 and v0.5.0, the unsigned zip only (ad hoc signed, not notarized), uploaded by the workflow's `publish-unsigned` job from the tag run after its build, audits and smoke test passed |
 
 What the Windows testing (stage 2) covers, and what it does not:
 

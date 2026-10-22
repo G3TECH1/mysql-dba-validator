@@ -2,416 +2,193 @@
 
 # MySQL DBA Validator
 
-**Review MySQL SQL before execution.**
+**How risky is this SQL, and how sure are we about that?**
 
-MySQL DBA Validator is a local-first tool for DBAs who review SQL from
-database tickets. Paste SQL and get the statement classification, a
-deterministic risk score, confidence, findings and a DBA review checklist.
-Optionally, it collects read-only database evidence (execution plans and
-table metadata) to refine the result. No LLM makes risk or security
-decisions.
+MySQL DBA Validator helps DBAs review MySQL SQL from database tickets before it
+is run. Paste up to 16 statements and get, for each one, a risk level and
+score, a confidence level, the findings behind the score and a review
+checklist. Optionally, it adds read-only evidence from a database (execution
+plans and table metadata).
 
-It supports a DBA's judgement. It does not guarantee that SQL is safe, and it
-never runs the SQL you submit.
+Scoring is rule-based and deterministic; no AI or LLM makes risk decisions.
+The validator never runs the SQL you submit. It supports a DBA's judgement and
+does not guarantee that SQL is safe.
 
-**Status: v0.5.0, pre-1.0**, a portable Windows x64 application
-([release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.0)).
-v0.5.0 changes how evidence, risk and confidence relate and how batches are
-validated (see [Changes in v0.5.0](#changes-in-v050)). These changes are
-covered by automated tests only; they have not been validated against a live
-MySQL server. On earlier code, local database evidence was verified by the
-maintainer against a real MySQL server, and the maintainer reports a
-successful end-to-end test of the remote/company workflow (v0.4.1) against an
-AWS RDS for MySQL test database. Nothing has been verified against real
-company infrastructure. See [Verification](#verification).
+**Current release: [v0.5.0](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.0)**
+(pre-1.0), a portable Windows x64 app, plus an unsigned macOS (Apple Silicon)
+build.
 
-An unsigned macOS build for Apple Silicon (ad hoc signed only, not notarized)
-is built, audited and smoke-tested in CI for each release since v0.4.1 but has
-not been tested on a real Mac; see
-[VERIFICATION.md](VERIFICATION.md#macos-apple-silicon-v041-unsigned-not-yet-verified-on-a-mac).
+![Validation results for a batch of four statements: overall risk CRITICAL, score 100 of 100, static analysis, batch confidence LIMITED; the top finding (statement 2, a DELETE with no WHERE clause), execution-plan, filter, limitation and unknown rows; and a table listing each statement with its risk, confidence and key finding](docs/images/validator-batch-review.png)
 
----
+*The v0.5.0 results page after validating four made-up statements with no
+database connected, so the result is static analysis only.*
 
 ## What it does
 
-- **Statement classification** of each statement in a batch (up to 16), using
-  the SQLGlot parser with the MySQL dialect.
-- **Deterministic risk scoring**, 0 to 100 (`LOW`, `MEDIUM`, `HIGH`,
-  `CRITICAL`), from explicit rules. The same input always gets the same static
-  result.
-- **Findings and a DBA review checklist** for each statement.
-- **Confidence** (`HIGH`, `LIMITED`, `LOW`): how sure the assessment is. Writes
-  are `LIMITED` because the affected-row count is not known.
-- **Optional database evidence** that states exactly what was collected, what
-  was deliberately not collected, and what failed:
-  - **local evidence** from MySQL on your machine, using the login you enter;
-  - **remote evidence** from operator-approved company targets, through a
-    local connector.
-- **No submitted-SQL execution.** Evidence comes only from `EXPLAIN` and fixed
-  metadata queries built by the application.
-- **No stored credentials.** MySQL logins are used for one operation and not
-  saved.
-- **Portable Windows x64 release**: no installer, no Python needed.
+- **Classifies and scores each statement** from explicit rules: risk `LOW`,
+  `MEDIUM`, `HIGH` or `CRITICAL`, with a score from 0 to 100. A batch's overall
+  score is its highest statement score, not a sum.
+- **Reports confidence separately from risk** (`HIGH`, `LIMITED` or `LOW`).
+  Confidence is how well the evidence supports the assessment, not a safety
+  rating.
+- **Explains the result:** findings with the points they add, the rows a write
+  can change where that is known, what is unknown, and a DBA checklist.
+- **Says when it could not assess SQL.** Each statement is either analysed,
+  not valid MySQL, a statement type it does not analyse, or SQL it could not
+  read. Anything not analysed is shown as `CRITICAL` with `LOW` confidence,
+  never as low risk.
+- **Adds database evidence on request.** With a MySQL login it collects
+  `EXPLAIN` for a plain `SELECT` and table metadata, on a read-only
+  connection. Company servers are reached only through a local connector, for
+  targets an operator has approved, over verified TLS. Each result says what
+  evidence was collected, not collected, or failed.
+- **Keeps credentials out of storage.** Logins are used for one operation and
+  never saved.
 
----
+## Important limitations
 
-## Screenshots
+- **Risk and confidence are assessments, not guarantees.** Review the SQL
+  yourself before running it.
+- **Partly read statements:** if the parser can read a statement only partly,
+  it is scored from what was read, with `LOW` confidence and a warning. A
+  clause the parser dropped is not assessed. A partly read statement can show
+  `LOW` risk even when the dropped text contained a write, and a partly read
+  write can show `MEDIUM` where a full reading might give `HIGH` or
+  `CRITICAL`.
+- **Executable comments are refused.** MySQL runs the contents of executable
+  comments (`/*! ... */`, `/*!50000 ... */`) as SQL, so input containing one
+  is refused (`executable_comment_not_supported`) rather than assessed. This
+  includes `mysqldump` headers such as `/*!40101 SET NAMES utf8mb4 */`. To
+  validate, remove the comment or move its SQL out of it: the result then
+  describes the edited SQL, not the original script. `/*!` inside a string,
+  quoted identifier or ordinary comment is not refused, except in a string
+  that also contains `\'`, which is refused because the server's backslash
+  mode is not known.
+- **`--` is read as MySQL reads it.** `--` starts a comment only when followed
+  by whitespace, a control character or the end of the input. Otherwise it is
+  two minus signs (`balance--1` is `balance - -1`), so a line of dashes such
+  as `----------` is not a comment and the statement it starts is reported as
+  not analysed (MySQL rejects it too). MariaDB `/*M! ... */` comments are
+  treated as ordinary comments, and a comment ending at a lone carriage return
+  may be read differently than by MySQL.
+- **Refused input:** empty or comment-only input, `DELIMITER` scripts, and
+  stored program definitions with a multi-statement body or mixed with other
+  statements are refused rather than split unreliably. `CALL` never reports
+  what a procedure does.
+- **No live MySQL validation of v0.5.0.** Its changes are covered by
+  automated tests only. On earlier code, local evidence was verified against a
+  real MySQL server, and the maintainer reported a successful test against an
+  AWS RDS for MySQL test database. Company MySQL, VPN/LAN and company-issued
+  TLS have never been verified.
+- **Unsigned builds.** The Windows build is not code-signed. The macOS build
+  is ad hoc signed only, not notarized, and has been tested only in CI, not on
+  a real Mac.
+- **Single user, local only.** There is no user authentication.
 
-Captured from the v0.4.1 page running locally, with no database connected
-(static analysis only). The SQL and table names are made-up examples.
+Details: the
+[evidence contract](docs/v2-database-evidence-contract.md#17-open-questions-and-known-limitations),
+[SECURITY.md](SECURITY.md#known-limitations) and
+[VERIFICATION.md](VERIFICATION.md).
 
-![Validation results for a DELETE without a WHERE clause: CRITICAL risk, score 100 of 100, LIMITED confidence, the reasons, a DBA review checklist, and the static, database-evidence and metadata panels](docs/images/validator-analysis-results.png)
+## Download and run
 
-*Validation results.* A `DELETE` with no `WHERE` clause is rated CRITICAL. The
-result lists why, the review checklist and the points behind the score, and
-the evidence panels say plainly that no database evidence was collected.
+Download from the
+[v0.5.0 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.0).
+Each file has a matching `.sha256` checksum file there.
 
-![The main page: MySQL connection and remote-target pairing on the left, the SQL input with the Validate SQL button on the right](docs/images/validator-main-interface.png)
+| Platform | File | Status |
+| --- | --- | --- |
+| Windows x64 | `MySQL-DBA-Validator-v0.5.0-windows-x64.zip` | Built, audited and smoke-tested in CI; the published zip's checksum and smoke test re-checked by the maintainer |
+| macOS, Apple Silicon only | `MySQL-DBA-Validator-v0.5.0-macos-arm64-unsigned.zip` | Built, audited and smoke-tested in CI only; ad hoc signed, not notarized |
 
-*Main page.* Connection settings and connector pairing on the left; paste up
-to 16 statements on the right and choose **Validate SQL**.
+**Windows**
 
----
-
-## Quick start
-
-### 1. Download and verify
-
-1. From the [v0.5.0 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.0),
-   download `MySQL-DBA-Validator-v0.5.0-windows-x64.zip` and the matching
-   `.sha256` file.
-2. Verify the download in PowerShell:
+1. Check the download in PowerShell, and compare the result with the
+   `.sha256` file:
 
    ```powershell
    Get-FileHash .\MySQL-DBA-Validator-v0.5.0-windows-x64.zip -Algorithm SHA256
    ```
 
-   The result must match the SHA256 shown on the release page and in the
-   `.sha256` file.
-3. Extract the zip anywhere, for example `C:\Tools\`.
+2. Extract the zip anywhere, for example `C:\Tools\`. No installer or Python
+   is needed.
+3. Run `MySQL-DBA-Validator.exe`. Your browser opens `http://127.0.0.1:8420`.
+   SmartScreen may warn because the app is not code-signed; continue only if
+   the checksum matched.
+4. Paste SQL and choose **Validate SQL**. To stop, close the page; the app
+   exits about 15 minutes later.
 
-The executable is not code-signed, so Windows SmartScreen may warn on first
-run. Only choose "Run anyway" if you downloaded the zip from this repository's
-release page and its SHA256 matches.
+For approved company targets, run `MySQL-DBA-Validator Console.exe` instead:
+its window is the local connector's operator console. The zip's `README.txt`
+covers local evidence, company targets and troubleshooting.
 
-### 2. Launch
+**macOS (Apple Silicon)**
 
-Double-click `MySQL-DBA-Validator.exe`. Your browser opens the local page at
-`http://127.0.0.1:8420`; no other window opens. To stop, close the page: the
-app stops on its own about 15 minutes after the last page closed.
-Double-clicking again while it runs just opens the page.
-
-The zip has two executables:
-
-- `MySQL-DBA-Validator.exe`: the web page and validation API on
-  `127.0.0.1:8420`, with no console window. Static validation and local MySQL
-  evidence.
-- `MySQL-DBA-Validator Console.exe`: the same page and API plus the local
-  connector on `127.0.0.1:8765`, needed only for approved remote/company
-  targets. Its console window is the connector's terminal: it shows the
-  browser pairing code and accepts operator commands (type `help`). Close the
-  window, or press Ctrl+C in it, to stop.
-
-### 3. Review SQL
-
-Paste one or more statements into the page and choose **Validate SQL**. For
-each statement you get:
-
-- the **risk level and score** (the overall score is the highest statement
-  score, not a sum);
-- the **confidence** of the assessment;
-- **findings** and a **review checklist**;
-- a **database evidence** panel saying what evidence the result has.
-
-With no login entered, the result is static analysis only, and says so.
-
-**Optional: local evidence.** For `EXPLAIN` and table metadata from MySQL on
-this machine (`127.0.0.1:3306`), enter your MySQL login in the page, choose
-**Discover databases**, select a database and validate. The login is used for
-that validation on one read-only connection, then discarded. Your MySQL
-account's privileges decide what evidence is possible. Local `UPDATE` and
-`DELETE` get table metadata but no execution plan, because MySQL refuses
-`EXPLAIN` of writes on a read-only connection.
-
-**Optional: company targets.** Start the Console version with the CA bundle
-that signs the company MySQL certificates:
-
-```powershell
-& ".\MySQL-DBA-Validator Console.exe" --tls-ca C:\path\to\company-ca.pem
-```
-
-Register and approve targets in its console, then pair the page with the code
-it shows. See [Running beyond one machine](#running-beyond-one-machine) and
-[connector/README.md](connector/README.md). Run
-`& ".\MySQL-DBA-Validator Console.exe" --help` for all options. The zip's
-`README.txt` covers these steps in more detail.
-
-### Where data goes
-
-The program folder is never written to. Per-user data is kept in
-`%LOCALAPPDATA%\MySQLDBAValidator\`:
-
-| File | Contents |
-| --- | --- |
-| `connector-targets.json` | Approved company targets: host, port, approval state, DNS snapshot. No credentials. |
-| `logs\backend.log` | Web app log, replaced on each start. |
-| `.env` (legacy, optional) | Not used for validation evidence. If present, only the API health check reports it. In v0.2.0, local evidence read an account from this file; that changed after v0.2.0. |
-
----
+Check the download with
+`shasum -a 256 -c MySQL-DBA-Validator-v0.5.0-macos-arm64-unsigned.zip.sha256`,
+unzip it, and move `MySQL DBA Validator.app` to Applications. macOS blocks the
+first launch because the app is not notarized; the
+[release notes](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.0)
+explain how to open it.
 
 ## How it works
 
-1. **Static analysis.** Every statement is parsed and scored by explicit
-   rules. This needs no database and is always the basis of the result.
-2. **Database evidence (optional).** If you supply a login, the validator
-   collects limited evidence: an execution plan (`EXPLAIN`) where it is
-   allowed, and table metadata from `information_schema`. Evidence can adjust
-   the score by small, bounded amounts. Missing evidence never lowers a score
-   and never changes confidence.
-3. **One evidence statement per result.** Each statement result says what
-   evidence was collected, deliberately not collected (for example, a local
-   write's plan), not eligible (for example, `SELECT … INTO`), failed, or not
-   attempted.
+1. **Paste the SQL** from the ticket. Without a login, the result is static
+   analysis of the SQL text, and says so.
+2. **Optionally add evidence.** Open *Database connection*, enter a MySQL
+   login, discover and select a database. For company servers, pair the page
+   with the local connector and choose an approved target.
+3. **Read the result:** overall risk and confidence first, then each
+   statement's findings, row scope, evidence and limitations.
+4. **Follow the checklist** and verify the change yourself before running it.
 
-**Local evidence** comes from loopback MySQL through the web app, on a
-read-only connection. A statement is sent for `EXPLAIN` only if it is exactly
-one plain `SELECT`.
-
-**Remote evidence** comes from company MySQL through the local connector,
-only for targets an operator approved, over TLS verified against a
-configured CA. It is scored by the same code as local evidence.
-
-The scoring rules, the evidence rules and the evidence fields in the API
-response are described in [ARCHITECTURE.md](ARCHITECTURE.md).
-
----
-
-## Architecture
-
-```mermaid
-flowchart LR
-    subgraph machine["Your machine (everything binds to 127.0.0.1)"]
-        B["Browser page"]
-        W["Web app :8420<br/>static analysis + local evidence"]
-        C["Local connector :8765<br/>(Console executable only)"]
-        L[("Local MySQL")]
-    end
-    R[("Approved company MySQL")]
-
-    B -- "SQL, optional local login" --> W
-    W -- "read-only evidence queries" --> L
-    B -- "paired session: target id, company login, SQL" --> C
-    C -- "approved target, verified TLS" --> R
-```
-
-The browser talks to the web app for static analysis and local evidence, and
-directly to the local connector for company targets. The web app never
-connects to company targets and never receives company credentials. Details,
-including the module map and request flows, are in
-[ARCHITECTURE.md](ARCHITECTURE.md).
-
----
-
-## Security
-
-- **Submitted SQL is never executed.** Evidence is limited to `EXPLAIN` and
-  fixed metadata queries built by the application, never `EXPLAIN ANALYZE`.
-  There is no endpoint that runs user-supplied SQL.
-- **Local evidence is read-only.** The connection is set to read-only
-  transactions before any evidence query; local `UPDATE`/`DELETE` are never
-  sent for `EXPLAIN`.
-- **Credentials are per request.** Logins are not written to disk, the target
-  registry, logs, URLs or browser storage. There is no credential vault.
-- **Company targets go through the connector only,** to targets approved in
-  the connector's console. Each connection re-checks the approved DNS
-  identity and requires TLS verified against the configured CA.
-- **MySQL privileges are the authorization boundary.** The validator's
-  restrictions are a safety layer on top of them, not a replacement. Use the
-  least-privileged account that can review the SQL.
-- **Single user, local only.** Both services bind to `127.0.0.1`. There is no
-  user authentication; this is not an internet-facing service.
-
-The full security model, known limitations and how to report a vulnerability
-are in [SECURITY.md](SECURITY.md).
-
----
-
-## Verification
-
-- **Automated tests:** 770 passing at v0.4.0, covering the parser, scoring,
-  evidence contract, local evidence boundary, connector security rules,
-  credential handling and the results page in real Chrome. They need no MySQL
-  server.
-- **Releases:** built by CI from the release tag, audited for secrets and
-  forbidden files, and smoke-tested from the extracted zip with no Python
-  installed. The published v0.4.0 zip was re-verified by the maintainer before
-  publishing.
-- **Real MySQL:** local database evidence was verified by the maintainer
-  against a real MySQL server with the Sakila sample database, on code before
-  v0.5.0. The v0.5.0 changes have not been checked against a live server.
-- **Remote workflow (maintainer-reported):** after the v0.4.1 release, the
-  maintainer reported a successful end-to-end test on Windows against an AWS
-  RDS for MySQL test database. No transcript is recorded, and it does not cover
-  other MySQL versions, network setups or error paths.
-- **Not verified:** real company MySQL, VPN/LAN connectivity and company-issued
-  TLS, and the positive M1 metadata adjustment against a live large table.
-
-The detailed matrix, including what each check covers, is in
-[VERIFICATION.md](VERIFICATION.md).
-
-### Changes in v0.5.0
-
-v0.5.0 revises how evidence, risk and confidence relate, and how a batch of
-statements is validated. These changes are covered by automated tests only;
-the live MySQL validation plan has not been run.
-
-- A `WHERE` clause, or a column named `id` or `*_id`, no longer lowers a
-  write's risk. Only a primary key or unique index confirmed from table
-  metadata can bound a write to at most one row, and the result says so. Such
-  a write is still at least `MEDIUM`: the key bounds the target row, not
-  triggers or foreign-key actions.
-- Each write shows its row scope: every row, at most one row, or not
-  established.
-- Company Mode connections are now read-only, like local ones, and MySQL must
-  confirm it. Plans for `UPDATE`/`DELETE` are never requested, so no write
-  privilege is needed.
-- Confidence is `LOW` when the SQL could only be read partly, and batches
-  report their lowest statement confidence.
-- A `WHERE` that is always true (`WHERE 1`, `WHERE id = 5 OR 1`) is treated
-  like no `WHERE`: every row, `CRITICAL`.
-- `EXPLAIN ANALYZE` is scored as the statement it runs, and `EXPLAIN` of a
-  write is no longer reported as harmless.
-- Execution plans are requested only for a `SELECT` whose function calls are
-  all on a reviewed list of MySQL built-ins. Row scope says that triggers and
-  foreign-key actions were not checked.
-- Up to 16 statements per request. Each statement says whether it was
-  analysed: SQL that MySQL would reject is "not valid MySQL"; valid statements
-  the validator does not analyse (`VALUES`, `TABLE`, `HANDLER`, a stored
-  program definition) are "not analysed"; SQL the parser cannot read is
-  "could not be read", never "invalid". None of these is ever scored as low
-  risk.
-- Empty or comment-only input is refused instead of being reported as a
-  low-risk batch. `DELIMITER` scripts, and stored program definitions with a
-  multi-statement body or mixed with other statements, are refused: they
-  cannot be split into statements reliably. `CALL` never reports what the
-  procedure does.
-- Known limitation: a statement the parser could read only partly is scored
-  from what was read, with `LOW` confidence and a warning. A partly read
-  `SELECT` can show `LOW` risk, and a write is at least `MEDIUM`, but a clause
-  the parser dropped is not assessed.
-
-The full contract is in
-[docs/v2-database-evidence-contract.md](docs/v2-database-evidence-contract.md).
-
----
+Evidence can adjust a score by small, bounded amounts. Missing evidence never
+lowers a score. The rules are in [ARCHITECTURE.md](ARCHITECTURE.md#risk-scoring)
+and the [evidence contract](docs/v2-database-evidence-contract.md).
 
 ## Running beyond one machine
 
-**Local workflow (one machine).** The web app, the page and, optionally, a
-MySQL server all run on your machine. The packaged release is built for this.
+The release is built for one user on one machine: both services bind to
+`127.0.0.1`. Company MySQL is reached only through the local connector on
+that machine, under an operator's approval; see
+[connector/README.md](connector/README.md).
 
-**Remote workflow (company targets).** Company MySQL servers are reached only
-through the local connector, which also runs on your machine:
-
-- An **operator** (whoever can type in the Console executable's window)
-  registers and approves each company target there. Browser sessions cannot
-  register, approve, revoke or delete targets: the connector's
-  target-management routes require an operator-scoped session, and the
-  packaged launcher issues only browser-scoped pairing sessions, so packaged
-  target management is done in the connector console.
-- The **page** pairs with the connector using a single-use code shown in that
-  window, then picks an approved target by its id. It cannot name a host, port
-  or TLS setting.
-- **Your company login** goes from the page to the connector for each
-  operation and is not stored. It never reaches the web app.
-
-The connector exists so company credentials and company network access stay
-on your machine, under an operator's explicit approval, instead of passing
-through a web API. Remote access is intentionally narrow: approved targets
-only, verified TLS only, and no fallback to the web app if the connector is
-not running. See [ARCHITECTURE.md](ARCHITECTURE.md#remote-validation-flow)
-and [connector/README.md](connector/README.md).
-
-**Serving the web app to other machines** (`--host 0.0.0.0`, a reverse proxy
-or a tunnel) is a trusted self-hosted setup only. In that setup the
-connection-test and discovery endpoints accept a user-supplied MySQL host, and
-there is no authentication, SaaS-grade SSRF/egress control or rate limiting.
-If you do it, set `CORS_ALLOW_ORIGINS` to the exact HTTPS origin, terminate
-TLS in the proxy, keep MySQL private, and use a read-only MySQL account.
-
----
+Serving the web app to other machines (`--host 0.0.0.0`, a reverse proxy or a
+tunnel) is a trusted self-hosted setup only. In that setup there is no
+authentication, rate limiting or egress control, and the connection-test and
+discovery endpoints accept a user-supplied MySQL host. If you do it, set
+`CORS_ALLOW_ORIGINS` to the exact HTTPS origin, terminate TLS in the proxy,
+keep MySQL private and use a read-only MySQL account.
 
 ## Documentation
 
 | Document | Covers |
 | --- | --- |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Components, request flows, what is sent to a database, scoring rules, evidence model |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Components, request flows, what is sent to a database, scoring rules, stored data |
+| [Evidence contract](docs/v2-database-evidence-contract.md) | What each result field means, the batch contract, known limitations |
 | [SECURITY.md](SECURITY.md) | Security model, known limitations, vulnerability reporting |
-| [VERIFICATION.md](VERIFICATION.md) | What has and has not been tested, release verification |
+| [VERIFICATION.md](VERIFICATION.md) | What has and has not been tested, and at which level |
 | [connector/README.md](connector/README.md) | Local connector: configuration, operator console, sessions, credentials |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, review areas, tests, pull requests |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, tests, review areas, pull requests |
 | [RELEASING.md](RELEASING.md) | Maintainer build and release procedure |
-| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | How we treat each other |
-
----
+| [Releases](https://github.com/realspinn/mysql-dba-validator/releases) | Changes, test results and checksums for each version |
 
 ## Development
 
-Requires Python 3.14 on Windows. Other platforms may work but are not tested.
+The project is developed and tested on Windows with Python 3.14. Setup, how
+to run the web app and connector from source, and the test commands
+(`python -m pytest -q` and `pip check`, no MySQL server needed) are in
+[CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
+## Contributing and support
 
-Run the web app and, in a second terminal, the connector:
-
-```powershell
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8420
-python -m connector --allow-origin http://localhost:8420
-```
-
-Open `http://localhost:8420`. The connector requires an explicit
-`--allow-origin` and has no default. Add `--tls-ca <ca.pem>` for company
-targets and `--registry <file>` for a non-default registry.
-
-Run the tests:
-
-```powershell
-python -m pytest -q
-pip check
-```
-
-Layout:
-
-```text
-backend/     FastAPI app (main.py), parser and risk engine, evidence collectors
-connector/   local connector: launcher, server, target policy and registry
-frontend/    index.html (served page)
-release/     Windows release launcher, PyInstaller spec, build, audit and smoke test
-tests/       pytest suite
-```
-
-Build a release locally:
-
-```powershell
-python release\build_windows.py
-python release\smoke_test_artifact.py dist\MySQL-DBA-Validator-v0.5.0-windows-x64.zip
-```
-
-The full process, including tagging and GitHub Releases, is in
-[RELEASING.md](RELEASING.md). Before contributing, read
-[CONTRIBUTING.md](CONTRIBUTING.md).
-
----
-
-## Roadmap
-
-- Windows installer after the portable build has proven reliable.
-- Deeper DBA analysis: stored procedures, transaction and session state,
-  exportable reports.
+Bug reports with steps to reproduce, and suggestions, are welcome in
+[GitHub Issues](https://github.com/realspinn/mysql-dba-validator/issues). Use
+made-up SQL and never include credentials, hostnames or company data. Report
+security vulnerabilities privately as described in [SECURITY.md](SECURITY.md),
+not in a public issue. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
 
 ## License
 
-Released under the [MIT License](LICENSE). You may use, modify, fork and distribute it, including your own versions, provided the copyright and licence notice are kept.
+[MIT](LICENSE).

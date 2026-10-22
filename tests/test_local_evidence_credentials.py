@@ -492,7 +492,6 @@ def test_local_select_is_still_planned_on_the_read_only_connection(mysql):
     "DELETE FROM users USING users JOIN orders ON users.id = orders.user_id",
     "UPDATE LOW_PRIORITY IGNORE users SET active = 0 ORDER BY id LIMIT 1",
     "DELETE LOW_PRIORITY QUICK IGNORE FROM users WHERE id = 1 ORDER BY id LIMIT 1",
-    "UPDATE users SET active = 0 WHERE id = 1 /*! , name = 'x' */",
     "UPDATE /*+ SET_VAR(transaction_read_only = OFF) */ users SET active = 0 WHERE id = 1",
     "UPDATE users SET active = 0 WHERE id = 1 -- */ ; DELETE FROM users; /*",
     "INSERT INTO users SELECT * FROM users",
@@ -512,7 +511,18 @@ def test_anything_but_a_verified_plain_select_gets_no_plan_request(mysql, sql):
 
 
 @pytest.mark.parametrize("sql", [
+    "UPDATE users SET active = 0 WHERE id = 1 /*! , name = 'x' */",
     "SELECT * FROM users /*!50000 , (SELECT 2) */",
+])
+def test_executable_comments_are_refused_before_anything_is_sent(mysql, sql):
+    # MySQL would run the comment's contents: the request is refused as a whole, so no
+    # session, plan request or comment reaches the server.
+    assert post(sql).json() == {"error": "executable_comment_not_supported"}
+    assert mysql.executed == []
+
+
+@pytest.mark.parametrize("sql", [
+    # The "/*!" is inside a line comment: MySQL does not run it, so the SELECT is planned.
     "SELECT * FROM users -- */ /*!50000 UNION SELECT 2 */",
     "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)",
     "WITH a AS (SELECT 1 AS id) SELECT * FROM users WHERE id IN (SELECT id FROM a)",

@@ -303,7 +303,9 @@ def test_discovery_state_is_cleared_on_target_login_and_session_changes(served_h
     ("-- only a comment", "no_statements"),
     ("DELIMITER //", "delimiter_not_supported"),
     ("CREATE PROCEDURE p() BEGIN DELETE FROM t; END", "stored_program_not_supported"),
-], ids=["statement_limit", "oversized_sql", "no_statements", "delimiter", "stored_program"])
+    ("SELECT 1; /*!50000 DELETE FROM t */", "executable_comment_not_supported"),
+], ids=["statement_limit", "oversized_sql", "no_statements", "delimiter", "stored_program",
+        "executable_comment"])
 def test_local_limit_errors_returned_by_api_have_friendly_page_messages(served_html, sql, code):
     response = TestClient(app).post("/api/validate", json={"sql": sql})
     assert response.status_code == 200 and response.json().get("error") == code
@@ -327,13 +329,15 @@ def test_batch_contract_errors_have_the_same_message_locally_and_remotely(served
                     if line.strip().startswith(code + ": '"))
         return line.strip()[len(code) + 3:].rstrip("',")
 
-    for code in ("no_statements", "delimiter_not_supported", "stored_program_not_supported"):
+    for code in ("no_statements", "delimiter_not_supported", "stored_program_not_supported",
+                 "executable_comment_not_supported"):
         local = message("RESPONSE_ERROR_MESSAGES", code)
         assert local == message("CONNECTOR_ERROR_MESSAGES", code)
         # Nothing was assessed: no risk level is implied.
         assert "LOW" not in local and "risk" not in local.lower()
     assert "Nothing was assessed." in message("RESPONSE_ERROR_MESSAGES", "no_statements")
     assert "not analysed" in message("RESPONSE_ERROR_MESSAGES", "stored_program_not_supported")
+    assert "nothing was assessed" in message("RESPONSE_ERROR_MESSAGES", "executable_comment_not_supported")
 
 
 def test_leaving_connector_mode_clears_company_login(served_html):

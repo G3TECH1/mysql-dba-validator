@@ -744,6 +744,86 @@ def stored_program_kind(chunk: list[Token]) -> Optional[str]:
 _DELIMITER_LINE = re.compile(r"^[ \t]*delimiter\b", re.IGNORECASE | re.MULTILINE)
 
 
+def _quoted_end(sql: str, start: int, backslash_escapes: bool) -> int:
+    """The index after the string or quoted identifier opened at start (MySQL rules:
+    a doubled quote continues it; a backslash escapes the next character when enabled)."""
+    quote, index, size = sql[start], start + 1, len(sql)
+    while index < size:
+        char = sql[index]
+        if backslash_escapes and char == "\\":
+            index += 2
+        elif char != quote:
+            index += 1
+        elif index + 1 < size and sql[index + 1] == quote:
+            index += 2
+        else:
+            return index + 1
+    return size
+
+
+def _mysql_comment_scan(sql: str, backslash_escapes: bool = True) -> tuple[list[int], list[int]]:
+    """Where MySQL's comment rules differ from sqlglot's, outside strings, quoted
+    identifiers and comments: (executable comment starts, "--" pairs MySQL reads as two
+    minus signs).
+
+    MySQL runs the contents of an executable comment ("/*!" or "/*!50000"), which sqlglot
+    keeps as a comment or, in comment-only input, drops. "--" starts a comment in MySQL
+    only when followed by whitespace, a control character or the end of the input
+    (otherwise "balance--1" is balance - -1); sqlglot reads every "--" as a comment.
+    backslash_escapes=False follows the NO_BACKSLASH_ESCAPES SQL mode.
+    """
+    executable: list[int] = []
+    minus_pairs: list[int] = []
+    index, size = 0, len(sql)
+    while index < size:
+        char = sql[index]
+        if char in "'\"":
+            index = _quoted_end(sql, index, backslash_escapes)
+        elif char == "`":
+            index = _quoted_end(sql, index, backslash_escapes=False)
+        elif char == "#" or sql.startswith("--", index):
+            follower = sql[index + 2:index + 3]
+            if char == "-" and follower and ord(follower) > 32 and ord(follower) != 127:
+                minus_pairs.append(index)
+                index += 1  # the second "-" is examined on its own
+                continue
+            line_end = sql.find("\n", index)
+            index = size if line_end < 0 else line_end + 1
+        elif sql.startswith("/*", index):
+            if sql.startswith("/*!", index):
+                executable.append(index)
+            comment_end = sql.find("*/", index + 2)
+            index = size if comment_end < 0 else comment_end + 2
+        else:
+            index += 1
+    return executable, minus_pairs
+
+
+def has_executable_comment(sql: str) -> bool:
+    """True when MySQL would run SQL from an executable comment ("/*! ... */").
+
+    Checked with and without backslash escapes: the server's SQL mode is not known, and
+    where the two modes end a string differently, a comment outside the string in either
+    mode is reported (the check never misses one that MySQL could run).
+    """
+    return any(_mysql_comment_scan(sql, escapes)[0] for escapes in (True, False))
+
+
+def mysql_minus_signs(sql: str) -> str:
+    """The SQL with a space between two minus signs wherever MySQL reads "--" as two
+    operators rather than a comment, so that sqlglot reads it the same way: the
+    statement's meaning is unchanged ("balance--1" becomes "balance- -1")."""
+    pairs = _mysql_comment_scan(sql)[1]
+    if not pairs:
+        return sql
+    parts, previous = [], 0
+    for position in pairs:
+        parts.append(sql[previous:position + 1])
+        previous = position + 1
+    parts.append(sql[previous:])
+    return " ".join(parts)
+
+
 def unsupported_script(sql: str) -> Optional[str]:
     """An error code when the script as a whole cannot be split into statements reliably:
 
@@ -756,6 +836,7 @@ def unsupported_script(sql: str) -> Optional[str]:
     A stored program definition submitted on its own is not an error: it is returned as
     one statement that is not analysed (UNSUPPORTED). None when neither applies.
     """
+    sql = mysql_minus_signs(sql)  # split the script as parse_sql does
     chunks = statement_chunks(sql)
     if chunks is None:
         # Cannot tokenize: look for a DELIMITER line in the raw text (may also match one
@@ -832,7 +913,8 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
     immediately failing the entire request.
     """
 
-    raw_sql = raw_sql.strip()
+    # "--" that MySQL reads as two minus signs must not be read as a comment.
+    raw_sql = mysql_minus_signs(raw_sql.strip())
 
     if not raw_sql:
         return []
@@ -881,7 +963,22 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
         if expr is None or isinstance(expr, exp.Semicolon):
             continue
 
-        statement_sql = expr.sql(dialect=DIALECT)
+        try:
+            statement_sql = expr.sql(dialect=DIALECT)
+        except Exception:
+            # The parser built something it cannot write back (sqlglot fails on a run
+            # of minus signs with nothing after it, such as a "----" line, which MySQL
+            # also rejects): not analysed, like a statement the parser cannot read.
+            chunk = chunks[index] if chunks is not None else None
+            facts_list.append(StatementFacts(
+                raw_sql=_source_text(raw_sql, chunk) or raw_sql,
+                index=index,
+                statement_type="UNKNOWN",
+                category="OTHER",
+                parse_error="the parser could not read this statement",
+                analysis_status=UNREADABLE,
+            ))
+            continue
 
         statement_type, category = _classify(expr)
 

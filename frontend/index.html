@@ -2704,6 +2704,7 @@
 			no_statements: 'No SQL statements found: the input is empty or contains only comments. Nothing was assessed.',
 			delimiter_not_supported: 'DELIMITER is a mysql client command, not SQL, and is not supported. Stored program definitions are not analysed; validate the statements in the body separately, ending each with a semicolon.',
 			stored_program_not_supported: 'A stored program definition (CREATE PROCEDURE, FUNCTION, TRIGGER or EVENT) cannot be split into statements reliably when its body has several statements or other statements are submitted with it. Stored programs are not analysed; validate the statements in the body separately.',
+			executable_comment_not_supported: 'The SQL contains an executable comment (/*! ... */). MySQL runs the SQL inside such a comment, but the validator cannot analyse it, so nothing was assessed. Move any SQL out of the comment, or remove the comment, and validate again.',
 			request_too_large: 'The SQL is too large. Validation is limited to 64 KiB.'
 		};
 		function errorMessage(data, fallback) {
@@ -2944,6 +2945,7 @@
 			no_statements: 'No SQL statements found: the input is empty or contains only comments. Nothing was assessed.',
 			delimiter_not_supported: 'DELIMITER is a mysql client command, not SQL, and is not supported. Stored program definitions are not analysed; validate the statements in the body separately, ending each with a semicolon.',
 			stored_program_not_supported: 'A stored program definition (CREATE PROCEDURE, FUNCTION, TRIGGER or EVENT) cannot be split into statements reliably when its body has several statements or other statements are submitted with it. Stored programs are not analysed; validate the statements in the body separately.',
+			executable_comment_not_supported: 'The SQL contains an executable comment (/*! ... */). MySQL runs the SQL inside such a comment, but the validator cannot analyse it, so nothing was assessed. Move any SQL out of the comment, or remove the comment, and validate again.',
 			company_database_scope_unavailable: 'Discover databases again with this MySQL login before selecting one.',
 			company_database_scope_stale: 'The target changed while discovering databases. Discover again.',
 			database_not_authorized: 'That database is not in the list discovered for this target and login. Discover again.',

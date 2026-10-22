@@ -307,7 +307,6 @@ def test_local_plan_failure_with_metadata_is_partial_evidence(mysql):
      "not_collected_read_only"),
     ("UPDATE /*+ SET_VAR(transaction_read_only = OFF) */ users SET active = 0 WHERE id = 1",
      "not_collected_read_only"),
-    ("UPDATE users SET active = 0 WHERE id = 1 /*! , name = 'x' */", "not_collected_read_only"),
     ("INSERT INTO users SELECT * FROM users", "not_supported"),
 ])
 def test_unsafe_or_ambiguous_statements_are_never_planned(mysql, sql, plan_state):
@@ -316,6 +315,15 @@ def test_unsafe_or_ambiguous_statements_are_never_planned(mysql, sql, plan_state
     assert_read_only_boundary(mysql)
     for statement in data["statements"]:
         assert statement["evidence"]["plan"]["state"] == plan_state
+
+
+def test_executable_comment_is_refused_with_no_assessment(mysql):
+    # MySQL would run the comment's contents: no risk, confidence or evidence is
+    # reported for SQL the validator cannot read as MySQL does, and nothing is sent.
+    response = post("UPDATE users SET active = 0 WHERE id = 1 /*! , name = 'x' */")
+    assert response.status_code == 200
+    assert response.json() == {"error": "executable_comment_not_supported"}
+    assert mysql.executed == []
 
 
 def test_an_unknown_gap_is_never_closed_by_unrelated_evidence():

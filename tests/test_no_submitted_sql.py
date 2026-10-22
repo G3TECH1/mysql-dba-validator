@@ -27,9 +27,8 @@ MARKED_SELECTS = [
     "SELECT * FROM users WHERE id = 987654",
     # A string literal, with an embedded quote.
     "SELECT * FROM users WHERE status = 'ZZMARK_LITERAL_O''Neil'",
-    # Block, executable and line comments.
+    # Block and line comments (an executable comment is refused: see below).
     "SELECT id FROM users /* ZZMARK_BLOCK_COMMENT */ WHERE id = 42",
-    "SELECT id FROM users WHERE id = 7 /*!80000 AND zzmark_exec_comment() */",
     "SELECT id FROM users WHERE id = 8 -- ZZMARK_LINE_COMMENT\n",
     # A distinctive column name and a subquery.
     "SELECT zzmark_column FROM users WHERE id IN (SELECT user_id FROM orders WHERE total > 31337)",
@@ -202,3 +201,25 @@ def test_a_connection_failure_sends_nothing_and_reports_no_plan(monkeypatch):
     assert statement["evidence"]["connection"]["state"] == "failed"
     assert statement["evidence"]["plan"]["state"] == "not_attempted"
     assert statement["database_evidence"]["available"] is False
+
+
+EXECUTABLE_COMMENT_SELECT = "SELECT id FROM users WHERE id = 7 /*!80000 AND zzmark_exec_comment() */"
+
+
+def test_executable_comment_is_refused_before_any_submitted_text_is_sent(monkeypatch, local_server):
+    # MySQL would run the comment's contents, so the request is refused as a whole,
+    # locally and by the connector, before any connection is opened.
+    response = post(EXECUTABLE_COMMENT_SELECT)
+    assert response.status_code == 200
+    assert response.json() == {"error": "executable_comment_not_supported"}
+    assert local_server.recorded == []
+
+    server = remote.FakeServer(explain=[remote.explain_row("const", 1, key="PRIMARY")])
+    runtime, connects = remote.remote_runtime(monkeypatch, server)
+    client, headers = remote.paired_client(runtime)
+    response = client.post("/company/targets/t1/validate", headers=headers,
+                           json={"sql": EXECUTABLE_COMMENT_SELECT, **remote.login()})
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "executable_comment_not_supported"
+    assert connects == []
+    assert server.executed == []

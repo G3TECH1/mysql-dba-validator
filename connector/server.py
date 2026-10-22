@@ -1846,6 +1846,26 @@ def create_app(*, runtime: ConnectorRuntime | None = None) -> FastAPI:
                 raise HTTPException(status_code=409, detail=_safe_json_error(
                     str(exc), status_code=409, error_code=str(exc))) from exc
 
+        # Refusals need only the submitted text, so they are decided before any
+        # connection to the target is opened. Same error codes as before.
+        sql_text = payload.sql.strip()
+        if not sql_text:
+            raise HTTPException(status_code=400, detail=_safe_json_error(
+                "invalid_sql", status_code=400, error_code="invalid_sql"))
+        from backend.main import batch_result, build_statement_result, script_error
+        try:
+            all_facts = parse_sql(sql_text)
+            error = script_error(sql_text, all_facts)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_safe_json_error(
+                "database_validation_failed", status_code=500, error_code="database_validation_failed")) from exc
+        # Comment-only SQL, executable comments, DELIMITER scripts, stored programs
+        # mixed with other statements, and more than 16 statements are refused as a
+        # whole (400).
+        if error is not None:
+            raise HTTPException(status_code=400, detail=_safe_json_error(
+                error, status_code=400, error_code=error))
+
         connection = None
         try:
             destination = runtime.resolve_and_validate_approved_company_target(
@@ -1862,20 +1882,7 @@ def create_app(*, runtime: ConnectorRuntime | None = None) -> FastAPI:
             )
             connection = runtime.require_read_only_session(connection)
 
-            sql_text = payload.sql.strip()
-            if not sql_text:
-                raise ValueError("invalid_sql")
-
             from backend.evidence_state import CONNECTED, connection_failed
-            from backend.main import batch_result, build_statement_result, script_error
-            all_facts = parse_sql(sql_text)
-            # Comment-only SQL, DELIMITER scripts, stored programs mixed with other
-            # statements, and more than 16 statements are refused as a whole (400).
-            error = script_error(sql_text, all_facts)
-            if error is not None:
-                raise HTTPException(status_code=400, detail=_safe_json_error(
-                    error, status_code=400, error_code=error))
-
             analyses = analyze_batch(all_facts)
             reports = [score_statement(analysis, batch_size=len(
                 analyses)) for analysis in analyses]
