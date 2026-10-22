@@ -26,7 +26,7 @@ than a recorded one.
 
 | Area | Status |
 | --- | --- |
-| Parser, risk engine, scoring adjustments, API, evidence contract, connector security rules | Automated tests at v0.5.0: 1313 passed, 4 skipped on the maintainer's Windows machine (Python 3.13.5) before tagging; in the v0.5.0 tag runs (Python 3.14), 1315 passed, 2 skipped on Windows and 1316 passed, 1 skipped on macOS. See [below](#v050-release-verification) |
+| Parser, risk engine, scoring adjustments, API, evidence contract, connector security rules | Automated tests at v0.5.0: 1313 passed, 4 skipped on the maintainer's Windows machine (Python 3.13.5) before tagging; in the v0.5.0 tag runs (Python 3.14), 1315 passed, 2 skipped on Windows and 1316 passed, 1 skipped on macOS. See [below](#v050-release-verification). For v0.5.1's source commit (`c884f44`), see [below](#v051-source-commit-comment-parsing-fix-c884f44) |
 | Results page rendering of every evidence state | Real headless Chrome, driven by real API responses (part of the test suite) |
 | Local web app and connector together in a browser | Real headless Chrome, with company MySQL replaced by a stand-in |
 | Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip. The published v0.5.0 zip's checksum and smoke test were re-checked on the maintainer's machine; its artifact audit ran in CI only (below) |
@@ -130,14 +130,16 @@ Not done for v0.5.0:
 - any check against a live MySQL server (see
   [Evidence contract revision](#evidence-contract-revision-v050)).
 
-## Unreleased: comment-parsing fix (working tree, not a release)
+## v0.5.1 source commit: comment-parsing fix (`c884f44`)
 
-Uncommitted changes on top of `v0.5.0`, 2026-10-22: executable comments
+v0.5.1 is `v0.5.0` plus this fix and a version bump. Commit
+`c884f44279a2fa8aa6e3ef9952454319a8445fce` on `main`, 2026-10-22: executable comments
 (`/*! ... */`) are refused (`executable_comment_not_supported`), and `--`
 before anything other than whitespace or a control character is read as two
 minus signs, as MySQL reads it. The connector now decides every whole-request
 refusal before opening a connection to the target. These results are not
-release results; none of this is in a published build.
+release results: they are for the source commit, not the `v0.5.1` tag. The
+tag runs and the checks of the published files are not recorded here yet.
 
 | Check | Result | Where |
 | --- | --- | --- |
@@ -146,8 +148,38 @@ release results; none of this is in a published build.
 | New and changed tests against the code before the fix | 21 fail, plus 4 that end in HTTP 500 (`- -` and similar input crashed the parser's SQL writer in v0.5.0) | Same machine; a scratch copy of `v0.5.0` with the new tests |
 | Refusal before connection, against the v0.5.0 connector order | 7 fail (a connection was opened before refusing) | Same machine; a scratch copy with only `connector/server.py` from `v0.5.0` |
 
-All of this uses fake connections and TestClient. No CI run, packaged build or
-live MySQL server has checked these changes.
+The local results above were taken on the working tree before the commit; the
+committed tree is the same.
+
+**CI on `c884f44`.** Both workflows were run by hand (`workflow_dispatch`) on
+`main`. These are validation builds, not release builds: no tag, no draft and
+no release was created, and the artifacts are named `v0.5.0` only because
+`APP_VERSION` was not changed. They are not the published v0.5.0 assets.
+
+| Check | Windows, run 39794532710 | macOS, run 39794828032 |
+| --- | --- | --- |
+| Runner, Python | Windows 2025 (GitHub-hosted), Python 3.14.8 | macOS 15.7.9 (GitHub-hosted, Apple Silicon), Python 3.14.7 |
+| sqlglot in the test environment | 30.24.0 (`requirements.txt` allows `>=30.17.0,<31.0.0`) | 30.24.0 |
+| Test suite | 1346 passed, 2 skipped. The log does not name the skipped tests, and this job has no unexpected-skip check | 1347 passed, 1 skipped (the Windows Job Object test); skip check: 1348 tests, 1 skipped, 0 unexpected |
+| `pip check` | Passed | Passed |
+| Build and artifact audit | Portable build passed; audit passed on the folder and the zip: 119 files, 2184 embedded modules, 0 secret values checked | Unsigned app build passed; audit passed on the app and the `ditto` zip: 112 files, 2220 embedded modules, 0 secret values checked |
+| Smoke test | 55/55 | 49/49 |
+| Release, signing, notarization, publishing | "Create draft GitHub Release" skipped | `sign-notarize`, `verify-signed`, `publish-unsigned` and `publish` skipped |
+
+**sqlglot inside the built apps.** The build installs the pinned
+`release/requirements-build*.txt` quietly, so the logs do not show the version.
+The workflow artifacts were downloaded afterwards, checked against their
+`.sha256` files (Windows `4caae239…`, macOS `e1aeba74…`), and their PyInstaller
+archives read without running anything: all four executables (both Windows
+`.exe` files and both macOS executables) embed `sqlglot._version` 30.21.0 for
+Python 3.14, and their `backend.main`/`backend.parser` contain
+`executable_comment_not_supported`, `has_executable_comment` and
+`mysql_minus_signs`. So the packaged apps use the release pin (30.21.0) while
+the CI tests ran on 30.24.0; the full suite has not been run on 30.21.0.
+
+Not shown by these runs: a real-Mac acceptance pass, any live MySQL server,
+company infrastructure, or a signed build. All database tests use fake
+connections and TestClient.
 
 ## v0.4.0 release verification
 
