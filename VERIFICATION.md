@@ -26,11 +26,11 @@ than a recorded one.
 
 | Area | Status |
 | --- | --- |
-| Parser, risk engine, scoring adjustments, API, evidence contract, connector security rules | Automated tests at v0.5.0: 1313 passed, 4 skipped on the maintainer's Windows machine (Python 3.13.5) before tagging; in the v0.5.0 tag runs (Python 3.14), 1315 passed, 2 skipped on Windows and 1316 passed, 1 skipped on macOS. See [below](#v050-release-verification). For v0.5.1's source commit (`c884f44`), see [below](#v051-source-commit-comment-parsing-fix-c884f44) |
+| Parser, risk engine, scoring adjustments, API, evidence contract, connector security rules | Automated tests at v0.5.0: 1313 passed, 4 skipped on the maintainer's Windows machine (Python 3.13.5) before tagging; in the v0.5.0 tag runs (Python 3.14), 1315 passed, 2 skipped on Windows and 1316 passed, 1 skipped on macOS. See [below](#v050-release-verification). For v0.5.1: in the tag runs (Python 3.14), 1346 passed, 2 skipped on Windows and 1347 passed, 1 skipped on macOS; see [v0.5.1 release verification](#v051-release-verification) and its [source commit](#v051-source-commit-comment-parsing-fix-c884f44) |
 | Results page rendering of every evidence state | Real headless Chrome, driven by real API responses (part of the test suite) |
 | Local web app and connector together in a browser | Real headless Chrome, with company MySQL replaced by a stand-in |
-| Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip. The published v0.5.0 zip's checksum and smoke test were re-checked on the maintainer's machine; its artifact audit ran in CI only (below) |
-| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
+| Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip. The published v0.5.1 zip's checksum and smoke test were re-checked on the maintainer's machine; its artifact audit ran in CI only (below) |
+| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0 or v0.5.1. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
 | Remote/company workflow (local connector) end to end against a real MySQL server | **Reported by the maintainer** (manual test, recorded after the v0.4.1 release): successful on Windows against an AWS RDS for MySQL test database the maintainer created. No transcript or logs were provided for this record; see [below](#remote-workflow-against-aws-rds-for-mysql-maintainer-reported) |
 | Real company MySQL, VPN/LAN connectivity, company-issued TLS, hosted HTTPS frontend | **Not verified** |
 | Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan. In v0.4.1 only the remote connector path collected one; since v0.5.0 neither path does (see below), so M1 does not arise in practice. Automated tests only |
@@ -108,6 +108,43 @@ locally.
 6. The zip and its `.sha256` are attached to a **draft** release, which a
    maintainer verifies and publishes by hand ([RELEASING.md](RELEASING.md)).
 
+## v0.5.1 release verification
+
+All from tag `v0.5.1`, commit `d8aef32fc5dc12648bbf576fbb579350e563f0fd`
+(`c884f44`, the comment-parsing fix, plus the version bump and documentation;
+see [below](#v051-source-commit-comment-parsing-fix-c884f44)). Published as
+[v0.5.1](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.1)
+on 2026-10-22 at 15:25:47 UTC; GitHub reports it as published (not a draft or
+prerelease) and Latest. v0.5.0 is still published, with its tag and asset
+digests unchanged.
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Windows tag run ([39800602988](https://github.com/realspinn/mysql-dba-validator/actions/runs/39800602988)) | Tag matched `APP_VERSION`. Tests 1346 passed, 2 skipped (the log does not name the skipped tests); `pip check` passed; portable folder and zip built; artifact audit passed on both (119 files, 2184 embedded modules, 0 secret values checked); smoke test 55/55; draft release created | CI, Windows 2025, Python 3.14.8, sqlglot 30.24.0 for the tests |
+| macOS tag run ([39800602982](https://github.com/realspinn/mysql-dba-validator/actions/runs/39800602982)) | Tag matched `APP_VERSION`. Tests 1347 passed, 1 skipped (the Windows Job Object test, expected); skip check passed (0 unexpected); `pip check` passed; unsigned app and zip built; audits passed on both (112 files, 2220 embedded modules, 0 secret values checked); smoke test 49/49; `publish-unsigned` uploaded the zip to the draft. `sign-notarize`, `verify-signed` and `publish` were skipped | CI, GitHub-hosted Apple Silicon runner, macOS 15.7.9, Python 3.14.7, sqlglot 30.24.0 for the tests |
+| Published Windows zip | `MySQL-DBA-Validator-v0.5.1-windows-x64.zip`: 32,937,113 bytes, SHA256 `8fa0e05d3b1bc34c382dcdaf80742ad59ec28da196c24c61ecdf5c8bfe979612`; its `.sha256` file is 110 bytes. Downloaded from the draft: matches its `.sha256` file, GitHub's asset digest and the CI log; smoke test 55/55 | Maintainer's machine |
+| Published macOS zip | `MySQL-DBA-Validator-v0.5.1-macos-arm64-unsigned.zip`: 33,653,413 bytes, SHA256 `02a103db80c5b23a6cab06d527dd71dc7842032d12410c582552ea35e1eb8d03`; its `.sha256` file is 118 bytes. Downloaded from the draft: matches its `.sha256` file, GitHub's asset digest and the CI log. Not run outside CI | Maintainer's machine (checksums only) |
+| sqlglot and the fix inside the built apps | Static reading of the PyInstaller archives in both downloaded zips, without running them: all four executables embed sqlglot 30.21.0 (the release pin) and contain the comment-parsing fix. The CI tests ran on sqlglot 30.24.0, so the packaged apps and the CI tests used different sqlglot versions | Maintainer's machine |
+| Published release | After publication, all four assets have the same sizes and digests as the downloaded draft files | GitHub API |
+
+Not done for v0.5.1:
+
+- the artifact audit of the published zips on the maintainer's machine
+  (PyInstaller, which the audit needs, is not installed there; the CI audits
+  passed);
+- any check against a live MySQL server (v0.5.0 and v0.5.1 changes are covered
+  by automated tests with fake connections only);
+- a real-Mac acceptance pass: the macOS zip has been tested in CI only;
+- code signing: the Windows zip is unsigned, and the macOS app is ad hoc
+  signed only, not notarized.
+
+The CI checks and the static archive reading above show what was built and
+packaged; they are not live database, real-Mac, signing or notarization
+validation. Known limitations of the fix itself (executable comments,
+including `mysqldump` output, are refused; MariaDB `/*M! */` comments are not
+recognised; partly read statements are still scored from what was read) are in
+the [README](README.md#important-limitations) and the evidence contract.
+
 ## v0.5.0 release verification
 
 All from tag `v0.5.0`, commit `86eb2994b885e9c573e710148f10c04564c47ead`.
@@ -139,7 +176,8 @@ before anything other than whitespace or a control character is read as two
 minus signs, as MySQL reads it. The connector now decides every whole-request
 refusal before opening a connection to the target. These results are not
 release results: they are for the source commit, not the `v0.5.1` tag. The
-tag runs and the checks of the published files are not recorded here yet.
+tag runs and the checks of the published files are in
+[v0.5.1 release verification](#v051-release-verification).
 
 | Check | Result | Where |
 | --- | --- | --- |
@@ -320,7 +358,7 @@ section 2); no wider Performance Schema grant is to be used.
   need an `UPDATE`/`DELETE` plan, which is no longer requested).
 - Every live-server check of the evidence contract revision (below).
 - Platforms other than Windows x64 on a real machine. The macOS (Apple
-  Silicon) unsigned zips (v0.4.1, v0.5.0) have been tested only in CI; see below.
+  Silicon) unsigned zips (v0.4.1, v0.5.0, v0.5.1) have been tested only in CI; see below.
 
 ## macOS (Apple Silicon), v0.4.1 unsigned: not yet verified on a Mac
 
@@ -335,7 +373,7 @@ These are separate stages; each is reached only when it has actually happened.
 | 5. Signed with a Developer ID | **Not yet** (needs an Apple Developer account; not planned until resources allow) |
 | 6. Notarized by Apple | **Not yet** |
 | 7. Accepted by Gatekeeper on a real Mac | **Not yet** |
-| 8. Published as a release | Yes: v0.4.1 and v0.5.0, the unsigned zip only (ad hoc signed, not notarized), uploaded by the workflow's `publish-unsigned` job from the tag run after its build, audits and smoke test passed |
+| 8. Published as a release | Yes: v0.4.1, v0.5.0 and v0.5.1, the unsigned zip only (ad hoc signed, not notarized), uploaded by the workflow's `publish-unsigned` job from the tag run after its build, audits and smoke test passed |
 
 What the Windows testing (stage 2) covers, and what it does not:
 
