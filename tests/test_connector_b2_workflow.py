@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 
 import pytest
+
+from tests.read_only_session import ReadOnlySessionCursor
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -130,6 +132,10 @@ class FakeCursor:
     def fetchmany(self, size):
         self.log.append(("fetchmany", size))
         return self.rows[:size]
+
+    def fetchone(self):
+        # Answers backend.db.READ_ONLY_CHECK_SQL: the session is confirmed read-only.
+        return {"transaction_read_only": 1}
 
     def close(self):
         pass
@@ -716,6 +722,10 @@ def fake_network(monkeypatch, stub_evidence):
     class FakePyMySQLConnection:
         def connect(self, sock=None):
             record["pymysql"][-1]["sock"] = sock
+
+        def cursor(self):
+            # The company connection is confirmed read-only before it is used.
+            return ReadOnlySessionCursor()
 
         def close(self):
             pass

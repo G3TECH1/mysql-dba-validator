@@ -134,6 +134,7 @@ def test_api_exposes_additive_m1_fields_without_merging_factors(monkeypatch):
         lambda sql, **_kwargs: SimpleNamespace(
             available=True,
             explain_available=True,
+            plan_row_count=1,
             estimated_rows=500,
             access_type="ALL",
             possible_keys=[],

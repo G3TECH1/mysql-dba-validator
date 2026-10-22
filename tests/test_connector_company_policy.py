@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 
 import connector.server as connector_server
 
+from backend.db import ReadOnlyEvidenceConnection
+from tests.read_only_session import READ_ONLY_STATEMENTS, ReadOnlySessionCursor, is_read_only_statement
 from connector.policy import (
     CompanyTarget,
     CompanyTargetRegistry,
@@ -898,6 +900,9 @@ def test_stage3c_c1_uses_exact_validated_ip_for_socket_and_mysql_handoff(stage3b
 
         def connect(self, *, sock=None, **kwargs):
             seen["pymysql_sock"] = sock
+
+        def cursor(self):
+            return ReadOnlySessionCursor()
             self.sock = sock
 
         def close(self):
@@ -925,7 +930,9 @@ def test_stage3c_c1_uses_exact_validated_ip_for_socket_and_mysql_handoff(stage3b
         tls_ca_path="/etc/ssl/certs/company-ca.pem",
     )
 
-    assert connected is fake_conn
+    # The returned connection is the same pymysql connection, confirmed read-only.
+    assert isinstance(connected, ReadOnlyEvidenceConnection)
+    assert connected._connection is fake_conn
     assert seen["family"] == socket.AF_INET
     assert seen["type"] == socket.SOCK_STREAM
     assert seen["destination"] == ("93.184.216.34", 3306)
@@ -1069,6 +1076,9 @@ def test_stage3c_c2_tls_uses_original_hostname_not_ip_and_requires_verified_tls(
 
         def connect(self, *, sock=None, **kwargs):
             seen["pymysql_sock"] = sock
+
+        def cursor(self):
+            return ReadOnlySessionCursor()
 
         def close(self):
             self.closed = True
@@ -1234,6 +1244,9 @@ def test_stage3c_c2_credential_is_not_exposed_in_response_or_logs(stage3b_client
         def connect(self, *, sock=None, **kwargs):
             pass
 
+        def cursor(self):
+            return ReadOnlySessionCursor()
+
         def close(self):
             self.closed = True
 
@@ -1284,6 +1297,10 @@ def test_d2_bounded_explain_operations_are_read_only(monkeypatch):
         def fetchall(self):
             return []
 
+        def fetchone(self):
+            # Answers backend.db.READ_ONLY_CHECK_SQL: the session is confirmed read-only.
+            return {"transaction_read_only": 1}
+
         def fetchmany(self, size):
             return self.fetchall()[:size]
 
@@ -1304,23 +1321,38 @@ def test_d2_bounded_explain_operations_are_read_only(monkeypatch):
     monkeypatch.setattr(runtime, "connect_company_target_mysql",
                         lambda *args, **kwargs: FakeConnection())
 
-    for operation in ("EXPLAIN_SELECT", "EXPLAIN_UPDATE", "EXPLAIN_DELETE"):
-        scope = {"database": "appdb", "table": "users", "columns": ["status"]}
+    scope = {"database": "appdb", "table": "users", "columns": ["status"]}
+    for operation in ("EXPLAIN_UPDATE", "EXPLAIN_DELETE"):
+        # A write plan needs a writable session; the company connection is read-only,
+        # so the request is refused before any connection is made.
         sql = runtime.build_bounded_explain_sql(
             target_id=target_id, operation=operation, scope=scope)
-        result = runtime.execute_bounded_explain_statement(
-            target_id=target_id,
-            operation=operation,
-            scope=scope,
-            sql_digest=hashlib.sha256(sql.encode("utf-8")).hexdigest(),
-            username="appuser",
-            password="secret",
-        )
-        assert result["status"] == "authorized"
+        with pytest.raises(ValueError, match="plan_not_collected_read_only"):
+            runtime.execute_bounded_explain_statement(
+                target_id=target_id,
+                operation=operation,
+                scope=scope,
+                sql_digest=hashlib.sha256(sql.encode("utf-8")).hexdigest(),
+                username="appuser",
+                password="secret",
+            )
+    assert executed == []
 
-    assert len(executed) == 3
-    assert all(statement.startswith("EXPLAIN ") for statement in executed)
-    assert all(not statement.startswith(("UPDATE ", "DELETE "))
+    sql = runtime.build_bounded_explain_sql(
+        target_id=target_id, operation="EXPLAIN_SELECT", scope=scope)
+    result = runtime.execute_bounded_explain_statement(
+        target_id=target_id,
+        operation="EXPLAIN_SELECT",
+        scope=scope,
+        sql_digest=hashlib.sha256(sql.encode("utf-8")).hexdigest(),
+        username="appuser",
+        password="secret",
+    )
+    assert result["status"] == "authorized"
+    evidence_statements = [statement for statement in executed if not is_read_only_statement(statement)]
+    assert executed[:2] == list(READ_ONLY_STATEMENTS)
+    assert evidence_statements == [sql]
+    assert all(not statement.startswith(("UPDATE ", "DELETE ", "EXPLAIN UPDATE", "EXPLAIN DELETE"))
                for statement in executed)
 
 

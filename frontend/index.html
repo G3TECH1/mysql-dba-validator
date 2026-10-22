@@ -782,7 +782,7 @@
 		/* Overall summary: the first cell carries the risk colour; the others stay neutral. */
 		.summary {
 			display: grid;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			grid-template-columns: repeat(4, minmax(0, 1fr));
 			gap: 10px;
 			margin-bottom: 8px
 		}
@@ -1126,10 +1126,1203 @@
 			color: var(--success)
 		}
 
+		/* ---------------------------------------------------------------- application shell */
+		.shell {
+			display: grid;
+			grid-template-columns: 236px minmax(0, 1fr);
+			min-height: 100vh
+		}
+
+		.sidebar {
+			position: sticky;
+			top: 0;
+			display: flex;
+			flex-direction: column;
+			gap: 20px;
+			height: 100vh;
+			padding: 20px 14px 16px;
+			border-right: 1px solid var(--border);
+			background: var(--surface)
+		}
+
+		.sidebar .brand {
+			padding: 0 6px
+		}
+
+		.sidebar .brand-mark {
+			width: 30px;
+			height: 30px
+		}
+
+		.sidebar h1 {
+			font-size: 14.5px
+		}
+
+		.sidebar .lede {
+			font-size: 12px
+		}
+
+		.nav {
+			display: grid;
+			gap: 2px
+		}
+
+		.nav-item {
+			justify-content: flex-start;
+			gap: 10px;
+			width: 100%;
+			height: 36px;
+			padding: 0 10px;
+			border-color: transparent;
+			background: transparent;
+			color: var(--text-2);
+			font-weight: 550
+		}
+
+		.nav-item svg {
+			width: 17px;
+			height: 17px;
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 1.6;
+			stroke-linejoin: round;
+			stroke-linecap: round
+		}
+
+		.nav-item:hover:not(:disabled) {
+			border-color: transparent;
+			background: var(--surface-3);
+			color: var(--text)
+		}
+
+		.nav-item.active,
+		.nav-item.active:hover:not(:disabled) {
+			background: var(--accent-soft);
+			color: var(--accent-text)
+		}
+
+		.new-review {
+			width: 100%
+		}
+
+		.sidebar-foot {
+			display: grid;
+			gap: 12px;
+			margin-top: auto
+		}
+
+		.conn-status {
+			display: flex;
+			gap: 10px;
+			align-items: flex-start;
+			padding: 10px 12px;
+			border: 1px solid var(--border);
+			border-radius: var(--radius-sm);
+			background: var(--surface-2);
+			font-size: 12.5px
+		}
+
+		.conn-status .dot {
+			margin-top: 5px
+		}
+
+		.conn-status strong {
+			display: block;
+			color: var(--text);
+			font-weight: 600;
+			overflow-wrap: anywhere
+		}
+
+		.sidebar .appearance {
+			display: flex
+		}
+
+		.sidebar .appearance label {
+			flex: 1;
+			text-align: center
+		}
+
+		.shell main {
+			width: 100%;
+			max-width: 1320px;
+			padding: 28px clamp(16px, 3vw, 40px) 64px
+		}
+
+		.view-head {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 16px;
+			align-items: flex-end;
+			justify-content: space-between;
+			margin-bottom: 22px
+		}
+
+		.view-head h2 {
+			margin-top: 4px;
+			font-size: 24px;
+			font-weight: 700;
+			letter-spacing: -.02em
+		}
+
+		.view-lede {
+			margin-top: 6px;
+			color: var(--text-3);
+			font-size: 14px
+		}
+
+		/* Dashboard */
+		#dashboardView .overview {
+			margin: 0;
+			padding: 0;
+			border: 0;
+			background: none;
+			box-shadow: none
+		}
+
+		#overview .ov-kpis {
+			gap: 12px
+		}
+
+		#overview .ov-tile {
+			padding: 16px 18px;
+			border-left-width: 1px;
+			border-top-width: 3px;
+			border-radius: var(--radius);
+			background: var(--surface);
+			box-shadow: var(--shadow)
+		}
+
+		#overview .ov-tile strong {
+			margin: 6px 0 4px;
+			font-size: 22px;
+			font-weight: 700;
+			letter-spacing: -.01em
+		}
+
+		#overview .ov-tile.lvl-LOW,
+		#overview .ov-tile.state-complete {
+			border-top-color: var(--low)
+		}
+
+		#overview .ov-tile.lvl-MEDIUM,
+		#overview .ov-tile.state-warning {
+			border-top-color: var(--medium)
+		}
+
+		#overview .ov-tile.lvl-HIGH {
+			border-top-color: var(--high)
+		}
+
+		#overview .ov-tile.lvl-CRITICAL,
+		#overview .ov-tile.state-failed {
+			border-top-color: var(--critical)
+		}
+
+		#overview .ov-tile.state-running {
+			border-top-color: var(--accent)
+		}
+
+		#overview .ov-tile.lvl-LOW,
+		#overview .ov-tile.lvl-MEDIUM,
+		#overview .ov-tile.lvl-HIGH,
+		#overview .ov-tile.lvl-CRITICAL,
+		#overview .ov-tile.state-complete,
+		#overview .ov-tile.state-warning,
+		#overview .ov-tile.state-failed,
+		#overview .ov-tile.state-running {
+			border-left-color: var(--border)
+		}
+
+		.ov-grid {
+			display: grid;
+			grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+			gap: 14px;
+			margin-top: 14px
+		}
+
+		.ov-card {
+			min-width: 0;
+			padding: 18px 20px;
+			border: 1px solid var(--border);
+			border-radius: var(--radius);
+			background: var(--surface);
+			box-shadow: var(--shadow)
+		}
+
+		.ov-card h3 {
+			margin: 0 0 12px;
+			color: var(--text-3);
+			font-size: 11.5px;
+			font-weight: 600;
+			letter-spacing: .06em;
+			text-transform: uppercase
+		}
+
+		.ov-card .brief-list {
+			gap: 9px
+		}
+
+		.assess-head {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 12px 18px;
+			align-items: center;
+			margin-bottom: 14px
+		}
+
+		.risk-badge {
+			padding: 6px 14px;
+			border: 1px solid var(--border);
+			border-radius: var(--radius-sm);
+			font-size: 18px;
+			font-weight: 750;
+			letter-spacing: .03em
+		}
+
+		.risk-badge.LOW {
+			border-color: var(--low-border);
+			background: var(--low-soft);
+			color: var(--low)
+		}
+
+		.risk-badge.MEDIUM {
+			border-color: var(--medium-border);
+			background: var(--medium-soft);
+			color: var(--medium)
+		}
+
+		.risk-badge.HIGH {
+			border-color: var(--high-border);
+			background: var(--high-soft);
+			color: var(--high)
+		}
+
+		.risk-badge.CRITICAL {
+			border-color: var(--critical-border);
+			background: var(--critical-soft);
+			color: var(--critical)
+		}
+
+		.assess-score {
+			font-size: 28px;
+			font-weight: 750;
+			letter-spacing: -.02em
+		}
+
+		.assess-score small {
+			color: var(--text-3);
+			font-size: 14px;
+			font-weight: 500
+		}
+
+		.assess-conf {
+			color: var(--text-2);
+			font-size: 13.5px
+		}
+
+		.assess-conf b {
+			color: var(--text)
+		}
+
+		.assess-target {
+			margin-bottom: 8px;
+			color: var(--text);
+			font-size: 14px;
+			font-weight: 600
+		}
+
+		.assess-scope {
+			margin-bottom: 14px;
+			color: var(--text-2);
+			font-size: 13.5px;
+			line-height: 1.5
+		}
+
+		.ov-card-foot {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+			margin-top: 16px
+		}
+
+		.evidence-table dt {
+			display: flex;
+			gap: 8px;
+			align-items: center
+		}
+
+		.evidence-table dt:before {
+			content: "";
+			flex: none;
+			width: 8px;
+			height: 8px;
+			border: 1.5px solid var(--text-3);
+			border-radius: 50%
+		}
+
+		.evidence-table dt.cov-done:before {
+			border-color: var(--success);
+			background: var(--success)
+		}
+
+		.evidence-table dt.cov-partial:before {
+			border-color: var(--medium);
+			background: var(--medium)
+		}
+
+		.evidence-table dt.cov-info:before {
+			border-style: dashed
+		}
+
+		/* Empty dashboard: onboarding, no metrics. */
+		.onboard {
+			display: grid;
+			grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+			gap: 28px;
+			align-items: center;
+			margin-top: 14px;
+			padding: 28px 30px;
+			border: 1px solid var(--border);
+			border-radius: var(--radius);
+			background: linear-gradient(135deg, var(--accent-soft), transparent 60%), var(--surface)
+		}
+
+		.onboard h3 {
+			margin: 0 0 8px;
+			font-size: 20px;
+			font-weight: 700;
+			letter-spacing: -.01em
+		}
+
+		.onboard p {
+			color: var(--text-2);
+			font-size: 14px;
+			line-height: 1.55
+		}
+
+		.onboard .ov-card-foot {
+			margin-top: 20px
+		}
+
+		.onboard-steps {
+			counter-reset: onboard;
+			display: grid;
+			gap: 12px;
+			margin: 0;
+			padding: 0;
+			list-style: none
+		}
+
+		.onboard-steps li {
+			counter-increment: onboard;
+			display: grid;
+			grid-template-columns: 28px 1fr;
+			gap: 2px 12px;
+			color: var(--text-3);
+			font-size: 13px
+		}
+
+		.onboard-steps li:before {
+			content: counter(onboard);
+			grid-row: span 2;
+			display: grid;
+			place-items: center;
+			width: 28px;
+			height: 28px;
+			border: 1px solid var(--accent);
+			border-radius: 50%;
+			color: var(--accent-text);
+			font-weight: 700
+		}
+
+		.onboard-steps b {
+			color: var(--text);
+			font-size: 14px
+		}
+
+		.ov-state {
+			display: flex;
+			gap: 14px;
+			align-items: center;
+			margin-top: 14px;
+			padding: 22px 24px;
+			border: 1px dashed var(--border-strong);
+			border-radius: var(--radius);
+			background: var(--surface-2);
+			color: var(--text-2);
+			font-size: 14px
+		}
+
+		.ov-state.failed {
+			border-style: solid;
+			border-color: var(--danger-border);
+			background: var(--danger-soft);
+			color: var(--danger)
+		}
+
+		/* SQL review workspace */
+		/* The sidebar and the connection drawer carry the flow; the step bar stays in the
+		   page for its state but is not shown in the workspace. */
+		#reviewView .stepper {
+			display: none
+		}
+
+		.review-grid {
+			display: grid;
+			gap: 16px
+		}
+
+		.review-grid #sqlInput {
+			min-height: 260px
+		}
+
+		.drawer {
+			border: 1px solid var(--border);
+			border-radius: var(--radius);
+			background: var(--surface);
+			box-shadow: var(--shadow)
+		}
+
+		.drawer>summary {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px 14px;
+			align-items: center;
+			padding: 14px 20px;
+			cursor: pointer;
+			list-style: none
+		}
+
+		.drawer>summary::-webkit-details-marker {
+			display: none
+		}
+
+		.drawer>summary:before {
+			content: "\25B8";
+			color: var(--text-3);
+			transition: transform .15s
+		}
+
+		.drawer[open]>summary:before {
+			transform: rotate(90deg)
+		}
+
+		.drawer>summary:focus-visible {
+			outline: 2px solid var(--accent);
+			outline-offset: -2px;
+			border-radius: var(--radius)
+		}
+
+		.drawer-title {
+			font-weight: 650
+		}
+
+		.drawer-meta {
+			color: var(--text-3);
+			font-size: 13px
+		}
+
+		.drawer-state {
+			display: inline-flex;
+			gap: 8px;
+			align-items: center;
+			margin-left: auto;
+			color: var(--text-2);
+			font-size: 13px
+		}
+
+		.drawer-body {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 16px;
+			padding: 0 16px 16px
+		}
+
+		.drawer-body .panel {
+			box-shadow: none
+		}
+
+		/* ---------------------------------------------------------------- review overview */
+		/* The current review at a glance. Every value comes from the page state or the last
+		   response; nothing is counted across reviews. */
+		.overview {
+			margin-bottom: 20px;
+			padding: 18px 20px 20px;
+			border: 1px solid var(--border);
+			border-radius: var(--radius);
+			background: var(--surface);
+			box-shadow: var(--shadow)
+		}
+
+		.overview-head {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 12px;
+			align-items: flex-end;
+			justify-content: space-between;
+			margin-bottom: 14px
+		}
+
+		.overview-head h2 {
+			margin: 2px 0 0;
+			font-size: 17px
+		}
+
+		.overview-actions {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+			align-items: center
+		}
+
+		.overview-link {
+			color: var(--accent-text);
+			font-size: 13.5px;
+			font-weight: 600;
+			text-decoration: none
+		}
+
+		.overview-link:hover {
+			text-decoration: underline
+		}
+
+		.overview-link:focus-visible,
+		.ov-finding a:focus-visible {
+			outline: 3px solid var(--focus);
+			outline-offset: 2px;
+			border-radius: 4px
+		}
+
+		.ov-kpis {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 10px
+		}
+
+		.ov-panels {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 10px;
+			margin-top: 10px
+		}
+
+		.ov-tile {
+			min-width: 0;
+			padding: 12px 14px;
+			border: 1px solid var(--border);
+			border-left-width: 3px;
+			border-radius: var(--radius-sm);
+			background: var(--surface-2)
+		}
+
+		.ov-tile .label {
+			color: var(--text-3);
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: .05em;
+			text-transform: uppercase
+		}
+
+		.ov-tile strong {
+			display: block;
+			margin: 4px 0 2px;
+			color: var(--text);
+			font-size: 18px;
+			font-weight: 650;
+			overflow-wrap: anywhere
+		}
+
+		.ov-tile small {
+			display: block;
+			color: var(--text-3);
+			font-size: 12.5px;
+			line-height: 1.4
+		}
+
+		.ov-tile.lvl-LOW {
+			border-left-color: var(--low)
+		}
+
+		.ov-tile.lvl-MEDIUM,
+		.ov-tile.state-warning {
+			border-left-color: var(--medium)
+		}
+
+		.ov-tile.lvl-HIGH {
+			border-left-color: var(--high)
+		}
+
+		.ov-tile.lvl-CRITICAL,
+		.ov-tile.state-failed {
+			border-left-color: var(--critical)
+		}
+
+		.ov-tile.state-complete {
+			border-left-color: var(--success)
+		}
+
+		.ov-tile.state-running {
+			border-left-color: var(--accent)
+		}
+
+		.ov-panel {
+			min-width: 0;
+			padding: 12px 14px;
+			border: 1px solid var(--border);
+			border-radius: var(--radius-sm)
+		}
+
+		.ov-panel h3 {
+			margin: 0 0 8px;
+			color: var(--text-3);
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: .05em;
+			text-transform: uppercase
+		}
+
+		.ov-finding a {
+			color: var(--text-2);
+			text-decoration: none
+		}
+
+		.ov-finding a:hover {
+			color: var(--text);
+			text-decoration: underline
+		}
+
+		/* ---------------------------------------------------------------- dashboard composition */
+		/* One assessment band, then a findings table beside unboxed action and evidence
+		   sections: aligned rows and hairlines instead of separate cards. */
+		#overview .ov-band {
+			display: grid;
+			grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 1fr));
+			border: 1px solid var(--border);
+			border-radius: var(--radius);
+			background: var(--surface);
+			box-shadow: var(--shadow)
+		}
+
+		#overview .ov-band .ov-tile {
+			padding: 18px 20px;
+			border: 0;
+			border-left: 1px solid var(--border);
+			border-radius: 0;
+			background: none;
+			box-shadow: none
+		}
+
+		#overview .ov-band .ov-tile:first-child {
+			border-left: 0
+		}
+
+		#overview .ov-band .ov-tile strong {
+			font-size: 20px
+		}
+
+		#overview .ov-band .ov-risk strong {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 4px 10px;
+			align-items: center;
+			font-size: 26px
+		}
+
+		.ov-risk .risk-badge {
+			padding: 3px 10px;
+			font-size: 15px
+		}
+
+		.ov-headline {
+			margin: 14px 2px 0;
+			color: var(--text-2);
+			font-size: 14px;
+			line-height: 1.5
+		}
+
+		.ov-headline b {
+			color: var(--text)
+		}
+
+		.ov-layout {
+			display: grid;
+			grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+			gap: 32px;
+			margin-top: 24px
+		}
+
+		.ov-section h3 {
+			margin: 0 0 10px;
+			color: var(--text-3);
+			font-size: 11.5px;
+			font-weight: 600;
+			letter-spacing: .06em;
+			text-transform: uppercase
+		}
+
+		.ov-section+.ov-section {
+			margin-top: 22px;
+			padding-top: 18px;
+			border-top: 1px solid var(--border)
+		}
+
+		.ov-table {
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 13.5px
+		}
+
+		.ov-table th {
+			padding: 0 10px 8px;
+			border-bottom: 1px solid var(--border-strong);
+			color: var(--text-3);
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: .05em;
+			text-align: left;
+			text-transform: uppercase
+		}
+
+		.ov-table td {
+			padding: 10px;
+			border-bottom: 1px solid var(--border);
+			color: var(--text-2);
+			vertical-align: baseline
+		}
+
+		.ov-table th:first-child,
+		.ov-table td:first-child {
+			padding-left: 0
+		}
+
+		.ov-table .num {
+			text-align: right;
+			white-space: nowrap;
+			font-variant-numeric: tabular-nums
+		}
+
+		.ov-table td.num {
+			color: var(--text);
+			font-weight: 600
+		}
+
+		.ov-table td.stmt {
+			white-space: nowrap;
+			color: var(--text-3);
+			font-variant-numeric: tabular-nums
+		}
+
+		.ov-table tr.ov-finding:hover td {
+			background: var(--surface-2)
+		}
+
+		.ov-actions {
+			display: grid;
+			gap: 8px;
+			margin: 0;
+			padding-left: 20px;
+			color: var(--text-2);
+			font-size: 13.5px;
+			line-height: 1.45
+		}
+
+		.ov-actions li::marker {
+			color: var(--text-3);
+			font-variant-numeric: tabular-nums
+		}
+
+		.ov-empty-note {
+			color: var(--text-3);
+			font-size: 13.5px
+		}
+
+		/* Before a review, while running, after a failure: one compact row, no panel. */
+		.ov-inline {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 14px 24px;
+			align-items: center;
+			margin-top: 18px;
+			padding: 16px 0;
+			border-bottom: 1px solid var(--border);
+			color: var(--text-2);
+			font-size: 14px
+		}
+
+		.ov-inline.failed {
+			color: var(--danger)
+		}
+
+		.ov-inline .ov-start-steps {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px 22px;
+			margin: 0;
+			padding: 0;
+			list-style: none;
+			counter-reset: start
+		}
+
+		.ov-start-steps li {
+			counter-increment: start;
+			display: flex;
+			gap: 8px;
+			align-items: baseline;
+			color: var(--text-3);
+			font-size: 13px
+		}
+
+		.ov-start-steps li:before {
+			content: counter(start);
+			color: var(--accent-text);
+			font-weight: 700
+		}
+
+		.ov-start-steps b {
+			color: var(--text);
+			font-weight: 600
+		}
+
+		/* Read by screen readers and in text, not shown. */
+		.visually-hidden {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip: rect(0 0 0 0);
+			white-space: nowrap
+		}
+
+		.ov-inline.start {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) auto;
+			gap: 14px 24px
+		}
+
+		.ov-inline.start .ov-start-steps {
+			grid-column: 1/-1;
+			grid-row: 2
+		}
+
+		.ov-inline .ov-start-lead {
+			flex: 1 1 320px;
+			color: var(--text-2)
+		}
+
+		.ov-inline .ov-start-lead b {
+			display: block;
+			margin-bottom: 2px;
+			color: var(--text);
+			font-size: 15px
+		}
+
+		/* ---------------------------------------------------------------- primary assessment */
+		/* Aligned label/value rows under the summary row; hairlines, no boxes. */
+		.assessment {
+			margin: 14px 0 22px;
+			border-top: 1px solid var(--border)
+		}
+
+		.assess-row {
+			display: grid;
+			grid-template-columns: 150px minmax(0, 1fr);
+			gap: 14px;
+			padding: 10px 2px;
+			border-bottom: 1px solid var(--border)
+		}
+
+		.assess-label {
+			padding-top: 1px;
+			color: var(--text-3);
+			font-size: 11.5px;
+			font-weight: 600;
+			letter-spacing: .05em;
+			text-transform: uppercase
+		}
+
+		.assess-value {
+			display: grid;
+			gap: 4px;
+			min-width: 0;
+			color: var(--text-2);
+			font-size: 13.5px;
+			line-height: 1.45
+		}
+
+		.assess-line {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 4px 10px;
+			align-items: baseline
+		}
+
+		.assess-line a {
+			color: var(--text);
+			font-weight: 600;
+			text-decoration: none
+		}
+
+		.assess-line a:hover {
+			text-decoration: underline
+		}
+
+		.assess-points {
+			color: var(--text-3);
+			font-variant-numeric: tabular-nums
+		}
+
+		.stmt-index {
+			margin-bottom: 22px
+		}
+
+		.stmt-index .stmt-what {
+			color: var(--text);
+			font-weight: 600
+		}
+
+		.stmt-index td.num a {
+			color: var(--accent-text);
+			font-weight: 700;
+			text-decoration: none
+		}
+
+		.details-heading {
+			margin: 4px 0 12px;
+			color: var(--text-3);
+			font-size: 11.5px;
+			font-weight: 600;
+			letter-spacing: .06em;
+			text-transform: uppercase
+		}
+
+		/* ---------------------------------------------------------------- review brief */
+		/* The batch at a glance, between the summary and the statement cards. */
+		.brief {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 10px;
+			margin: 12px 0 18px
+		}
+
+		.brief-section {
+			min-width: 0;
+			padding: 14px 16px;
+			border: 1px solid var(--border);
+			border-radius: var(--radius);
+			background: var(--surface)
+		}
+
+		.brief-section h3 {
+			margin: 0 0 10px;
+			color: var(--text-3);
+			font-size: 11.5px;
+			font-weight: 600;
+			letter-spacing: .05em;
+			text-transform: uppercase
+		}
+
+		.brief-lead {
+			margin: 0 0 10px;
+			color: var(--text);
+			font-size: 13.5px
+		}
+
+		.brief-list {
+			display: grid;
+			gap: 7px;
+			margin: 0;
+			padding: 0;
+			list-style: none;
+			color: var(--text-2);
+			font-size: 13.5px;
+			line-height: 1.45
+		}
+
+		.brief-list li {
+			display: flex;
+			gap: 8px;
+			align-items: baseline;
+			min-width: 0
+		}
+
+		.brief-list li.muted {
+			color: var(--text-3)
+		}
+
+		.sev {
+			flex: none;
+			padding: 1px 7px;
+			border: 1px solid var(--border);
+			border-radius: 999px;
+			font-size: 10.5px;
+			font-weight: 700;
+			letter-spacing: .04em
+		}
+
+		.sev.LOW {
+			border-color: var(--low-border);
+			background: var(--low-soft);
+			color: var(--low)
+		}
+
+		.sev.MEDIUM {
+			border-color: var(--medium-border);
+			background: var(--medium-soft);
+			color: var(--medium)
+		}
+
+		.sev.HIGH {
+			border-color: var(--high-border);
+			background: var(--high-soft);
+			color: var(--high)
+		}
+
+		.sev.CRITICAL {
+			border-color: var(--critical-border);
+			background: var(--critical-soft);
+			color: var(--critical)
+		}
+
+		.evidence-table {
+			display: grid;
+			grid-template-columns: max-content minmax(0, 1fr);
+			gap: 7px 14px;
+			margin: 0;
+			font-size: 13.5px
+		}
+
+		.evidence-table dt {
+			color: var(--text-3);
+			font-weight: 600
+		}
+
+		.evidence-table dd {
+			margin: 0;
+			color: var(--text-2)
+		}
+
+		/* Detailed score reasoning, collapsed by default. */
+		details.reasoning {
+			grid-column: 1/-1;
+			min-width: 0;
+			border: 1px solid var(--border);
+			border-radius: var(--radius-sm)
+		}
+
+		details.reasoning>summary {
+			padding: 10px 14px;
+			color: var(--text-2);
+			font-size: 13px;
+			font-weight: 600;
+			cursor: pointer
+		}
+
+		details.reasoning[open]>summary {
+			border-bottom: 1px solid var(--border)
+		}
+
+		details.reasoning>.layer {
+			border: 0
+		}
+
+		.loading {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 12px;
+			min-height: 160px;
+			border: 1px dashed var(--border-strong);
+			border-radius: var(--radius);
+			background: var(--surface-2);
+			color: var(--text-3);
+			font-size: 13.5px
+		}
+
+		.spinner {
+			width: 18px;
+			height: 18px;
+			border: 2px solid var(--border-strong);
+			border-top-color: var(--accent);
+			border-radius: 50%;
+			animation: spin .8s linear infinite
+		}
+
+		@keyframes spin {
+			to {
+				transform: rotate(360deg)
+			}
+		}
+
 		/* ---------------------------------------------------------------- responsive */
+		@media (max-width: 960px) {
+			.shell {
+				grid-template-columns: 1fr
+			}
+
+			.sidebar {
+				position: static;
+				flex-direction: row;
+				flex-wrap: wrap;
+				align-items: center;
+				gap: 10px 16px;
+				height: auto;
+				padding: 12px 16px;
+				border-right: 0;
+				border-bottom: 1px solid var(--border)
+			}
+
+			.nav {
+				display: flex
+			}
+
+			.nav-item {
+				width: auto
+			}
+
+			.new-review {
+				width: auto
+			}
+
+			.sidebar-foot {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 10px;
+				margin: 0 0 0 auto
+			}
+
+			.conn-status {
+				padding: 6px 10px
+			}
+
+			.ov-grid,
+			.onboard,
+			.drawer-body,
+			.ov-layout {
+				grid-template-columns: 1fr
+			}
+
+			#overview .ov-band {
+				grid-template-columns: repeat(3, minmax(0, 1fr))
+			}
+
+			#overview .ov-band .ov-risk {
+				grid-column: 1/-1;
+				border-bottom: 1px solid var(--border)
+			}
+
+			#overview .ov-band .ov-risk+.ov-tile {
+				border-left: 0
+			}
+		}
+
 		@media (max-width: 1080px) {
 			.workspace {
 				grid-template-columns: 1fr
+			}
+
+			/* SQL first: the editor and results come before connection settings. */
+			.workspace>.stack:last-child {
+				order: -1
 			}
 
 			.results-panel {
@@ -1160,9 +2353,85 @@
 				display: none
 			}
 
+			.assess-row {
+				grid-template-columns: 1fr;
+				gap: 4px
+			}
+
+			/* Statements table as stacked rows: number, statement and risk, then
+			   confidence and the key finding on their own lines. */
+			.stmt-index thead {
+				display: none
+			}
+
+			.stmt-index tr {
+				display: grid;
+				grid-template-columns: 36px minmax(0, 1fr) auto;
+				gap: 4px 10px;
+				padding: 10px 0;
+				border-bottom: 1px solid var(--border)
+			}
+
+			.stmt-index td,
+			.stmt-index td:first-child {
+				padding: 0;
+				border: 0;
+				text-align: left
+			}
+
+			.stmt-index td:nth-child(4),
+			.stmt-index td:nth-child(5) {
+				grid-column: 2/-1
+			}
+
+			.stmt-index td:nth-child(4):before {
+				content: "Confidence: ";
+				color: var(--text-3)
+			}
+
 			.summary,
-			.metric-grid {
+			.metric-grid,
+			.brief,
+			.ov-panels {
 				grid-template-columns: 1fr
+			}
+
+			.ov-kpis {
+				grid-template-columns: repeat(2, minmax(0, 1fr))
+			}
+
+			#overview .ov-band {
+				grid-template-columns: 1fr
+			}
+
+			#overview .ov-band .ov-tile {
+				border-left: 0;
+				border-top: 1px solid var(--border)
+			}
+
+			#overview .ov-band .ov-tile:first-child {
+				border-top: 0
+			}
+
+			.ov-table .stmt {
+				white-space: normal
+			}
+
+			.sidebar .lede,
+			.sidebar .new-review {
+				display: none
+			}
+
+			.view-head h2 {
+				font-size: 20px
+			}
+
+			#overview .ov-tile strong {
+				font-size: 18px
+			}
+
+			.onboard {
+				padding: 22px 20px
 			}
 
 			.kbd-hint {
@@ -1208,8 +2477,8 @@
 </head>
 
 <body>
-	<header class="topbar">
-		<div class="topbar-inner">
+	<div class="shell">
+		<aside class="sidebar" aria-label="Application">
 			<div class="brand">
 				<svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
 					<g fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
@@ -1221,13 +2490,18 @@
 				</svg>
 				<div>
 					<h1>MySQL DBA Validator</h1>
-					<p class="lede">Review MySQL statements for risk before you run them.</p>
+					<p class="lede">SQL risk review</p>
 				</div>
 			</div>
-			<div class="topbar-tools">
-				<div class="context-chip" aria-live="polite">
-					<span class="kicker">Context</span>
-					<strong id="headerContext">Static analysis only</strong>
+			<nav class="nav" aria-label="Views">
+				<button type="button" class="nav-item active" data-view="dashboard" aria-current="page"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M3 3h6v8H3zM11 3h6v5h-6zM11 10h6v7h-6zM3 13h6v4H3z"/></svg><span>Dashboard</span></button>
+				<button type="button" class="nav-item" data-view="review"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M4 3h9l3 3v11H4z M7 8h6 M7 11h6 M7 14h4"/></svg><span>SQL review</span></button>
+			</nav>
+			<button type="button" class="primary new-review" data-action="new-review">New SQL review</button>
+			<div class="sidebar-foot">
+				<div class="conn-status" aria-live="polite">
+					<span id="sidebarDot" class="dot"></span>
+					<div><span class="kicker">Context</span><strong id="headerContext">Static analysis only</strong></div>
 				</div>
 				<div class="appearance" role="radiogroup" aria-label="Appearance">
 					<label><input type="radio" name="theme" value="light" /><span>Light</span></label>
@@ -1235,22 +2509,63 @@
 					<label><input type="radio" name="theme" value="system" checked /><span>System</span></label>
 				</div>
 			</div>
-		</div>
-	</header>
+		</aside>
 
-	<main>
-		<nav class="stepper" aria-label="Validation workflow">
+		<main>
+			<section class="view" id="dashboardView" aria-labelledby="dashboardHeading">
+				<header class="view-head">
+					<div>
+						<div class="kicker">Review workspace</div>
+						<h2 id="dashboardHeading">Dashboard</h2>
+						<p class="view-lede">Risk, confidence and evidence for the SQL you are reviewing now.</p>
+					</div>
+					<button class="primary" id="overviewReviewBtn" type="button" data-action="new-review">New SQL review</button>
+				</header>
+				<section class="overview" id="overview" aria-label="Current review">
+					<div id="overviewBody"></div>
+				</section>
+			</section>
+
+			<section class="view" id="reviewView" aria-labelledby="reviewHeading" hidden>
+				<header class="view-head">
+					<div>
+						<div class="kicker">SQL review</div>
+						<h2 id="reviewHeading">Review workspace</h2>
+						<p class="view-lede">Paste SQL and validate it. A database connection is optional.</p>
+					</div>
+					<button class="secondary" type="button" data-view="dashboard">Back to dashboard</button>
+				</header>
+				<nav class="stepper" aria-label="Validation workflow">
 			<div class="step active">Connection<small>configure / test</small></div>
 			<div class="step">Database<small>discover / select</small></div>
 			<div class="step">SQL Review<small>inspect / validate</small></div>
 			<div class="step">Findings<small>read the result</small></div>
 		</nav>
+				<div class="review-grid">
+				<section class="panel" aria-labelledby="sqlHeading">
+					<div class="panel-title">
+						<div class="kicker">SQL</div>
+						<h2 id="sqlHeading">SQL statement</h2>
+						<p class="panel-note">Paste up to 16 MySQL statements. A selected database adds context; it
+							never changes the SQL you submit.</p>
+					</div>
+					<textarea id="sqlInput" aria-labelledby="sqlHeading" spellcheck="false"
+						placeholder="UPDATE orders SET status = 'active' WHERE created_at > '2024-01-01';"></textarea>
+					<div class="actions"><button class="primary" id="validateBtn">Validate SQL</button><span
+							id="validationStatus" class="status" role="status">Static validation is available without a
+							database.</span><span class="kbd-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span></div>
+				</section>
 
-		<div class="workspace">
-			<div class="stack">
+				<details class="drawer" id="connectionDrawer">
+					<summary>
+						<span class="drawer-title">Database connection</span>
+						<span class="drawer-meta">Optional &middot; adds execution-plan and metadata evidence</span>
+						<span class="drawer-state"><span id="drawerDot" class="dot"></span><span id="drawerStatus">Static analysis only</span></span>
+					</summary>
+					<div class="drawer-body">
 				<section class="panel" aria-labelledby="connectionHeading">
 					<div class="panel-title">
-						<div class="kicker">Step 1</div>
+						<div class="kicker">Connection</div>
 						<h2 id="connectionHeading">MySQL connection</h2>
 						<p class="panel-note">Your database login is used for connection, database evidence and
 							metadata during validation. Credentials are not saved.</p>
@@ -1293,7 +2608,7 @@
 
 				<section class="panel" aria-labelledby="databaseHeading">
 					<div class="panel-title">
-						<div class="kicker">Step 2 &middot; optional</div>
+						<div class="kicker">Database &middot; optional</div>
 						<h2 id="databaseHeading">Choose a database</h2>
 						<p class="panel-note">Needed only for EXPLAIN and metadata evidence. Discovery lists only the
 							databases your MySQL account can see.</p>
@@ -1311,26 +2626,12 @@
 								id="contextStatus">No database selected</span></span><span class="muted">Each validation
 							uses a fresh database connection.</span></div>
 				</section>
-			</div>
-
-			<div class="stack">
-				<section class="panel" aria-labelledby="sqlHeading">
-					<div class="panel-title">
-						<div class="kicker">Step 3</div>
-						<h2 id="sqlHeading">SQL statement</h2>
-						<p class="panel-note">Paste up to 16 MySQL statements. A selected database adds context; it
-							never changes the SQL you submit.</p>
 					</div>
-					<textarea id="sqlInput" aria-labelledby="sqlHeading" spellcheck="false"
-						placeholder="UPDATE orders SET status = 'active' WHERE created_at > '2024-01-01';"></textarea>
-					<div class="actions"><button class="primary" id="validateBtn">Validate SQL</button><span
-							id="validationStatus" class="status" role="status">Static validation is available without a
-							database.</span><span class="kbd-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span></div>
-				</section>
+				</details>
 
 				<section class="panel results-panel" aria-labelledby="resultsHeading">
 					<div class="panel-title">
-						<div class="kicker">Step 4</div>
+						<div class="kicker">Result</div>
 						<h2 id="resultsHeading">Validation results</h2>
 						<p class="panel-note">Risk is how dangerous the SQL looks; confidence is how sure the
 							validator is of that assessment. Database evidence shows what MySQL actually provided.
@@ -1344,9 +2645,10 @@
 						</div>
 					</div>
 				</section>
-			</div>
-		</div>
-	</main>
+				</div>
+			</section>
+		</main>
+	</div>
 
 	<script>
 		// Target-driven state: backend determines security, not frontend mode selection.
@@ -1399,6 +2701,9 @@
 		// The public API reports some validation limits as {"error": code} without a message.
 		const RESPONSE_ERROR_MESSAGES = {
 			statement_limit_exceeded: 'Too many statements. At most 16 statements can be validated at once.',
+			no_statements: 'No SQL statements found: the input is empty or contains only comments. Nothing was assessed.',
+			delimiter_not_supported: 'DELIMITER is a mysql client command, not SQL, and is not supported. Stored program definitions are not analysed; validate the statements in the body separately, ending each with a semicolon.',
+			stored_program_not_supported: 'A stored program definition (CREATE PROCEDURE, FUNCTION, TRIGGER or EVENT) cannot be split into statements reliably when its body has several statements or other statements are submitted with it. Stored programs are not analysed; validate the statements in the body separately.',
 			request_too_large: 'The SQL is too large. Validation is limited to 64 KiB.'
 		};
 		function errorMessage(data, fallback) {
@@ -1636,6 +2941,9 @@
 			unknown_company_target: 'This target is not registered in the local connector.',
 			request_too_large: 'The request is too large. SQL for remote validation is limited to 64 KiB.',
 			statement_limit_exceeded: 'Too many statements. At most 16 statements can be validated at once.',
+			no_statements: 'No SQL statements found: the input is empty or contains only comments. Nothing was assessed.',
+			delimiter_not_supported: 'DELIMITER is a mysql client command, not SQL, and is not supported. Stored program definitions are not analysed; validate the statements in the body separately, ending each with a semicolon.',
+			stored_program_not_supported: 'A stored program definition (CREATE PROCEDURE, FUNCTION, TRIGGER or EVENT) cannot be split into statements reliably when its body has several statements or other statements are submitted with it. Stored programs are not analysed; validate the statements in the body separately.',
 			company_database_scope_unavailable: 'Discover databases again with this MySQL login before selecting one.',
 			company_database_scope_stale: 'The target changed while discovering databases. Discover again.',
 			database_not_authorized: 'That database is not in the list discovered for this target and login. Discover again.',
@@ -1867,6 +3175,7 @@
 			validateBtn.setAttribute('aria-busy', 'true');
 			$('results').setAttribute('aria-busy', 'true');
 			setStatus($('validationStatus'), 'Reviewing statement...', '');
+			renderLoading();
 
 			try {
 				// A selected connector target, or any typed remote host, takes the connector path;
@@ -1879,7 +3188,9 @@
 					throw new Error(errorMessage(data, 'Validation returned an unexpected response.'));
 
 				renderResults(data);
-				setStatus($('validationStatus'), 'Review complete.', 'success');
+				setStatus($('validationStatus'), data.overall_confidence === 'HIGH'
+					? 'Review complete.'
+					: 'Review complete. Confidence is ' + text(data.overall_confidence) + ': read the limitations.', 'success');
 			} catch (error) {
 				setStatus($('validationStatus'), error.message || 'Validation failed.', 'error');
 				renderError(error.message || 'Validation failed.');
@@ -1901,6 +3212,9 @@
 				(state.selectedDatabase ? 'Database: ' + state.selectedDatabase : 'Static analysis only');
 			$('contextStatus').textContent = state.selectedDatabase ? 'Database: ' + state.selectedDatabase : 'No database selected';
 			$('contextDot').classList.toggle('on', Boolean(state.selectedDatabase));
+			$('sidebarDot').classList.toggle('on', Boolean(state.selectedDatabase));
+			$('drawerDot').classList.toggle('on', Boolean(state.selectedDatabase));
+			$('drawerStatus').textContent = state.selectedDatabase ? 'Database: ' + state.selectedDatabase : 'Static analysis only';
 			updateStepper();
 		}
 
@@ -1999,8 +3313,9 @@
 			explain_failed: 'MySQL could not produce an EXPLAIN plan for this statement.',
 			unsupported_statement_type: 'No execution plan is collected for this statement type.',
 			collection_failed: 'Evidence collection failed. The static analysis is still complete.',
-			plan_not_collected_read_only: 'Execution plan not collected because the evidence connection is read-only.',
-			plan_not_eligible: 'No execution plan was requested: this statement is not eligible for planning (for example SELECT ... INTO).'
+			plan_not_collected_read_only: 'Execution plan not requested: the validator does not request plans for UPDATE or DELETE, because evidence connections are read-only and it never asks for write access.',
+			plan_not_eligible: 'No execution plan was requested: this statement is not eligible for planning (for example SELECT ... INTO, or a function call that is not on the reviewed list of MySQL built-ins).',
+			explain_format_unsupported: 'No execution plan is shown: MySQL returned it in a format the validator does not read. The server explain_format setting must be TRADITIONAL.'
 		};
 
 		// Why table metadata was not collected, from the stable code the server reports.
@@ -2018,16 +3333,60 @@
 		}
 
 		// One headline per overall evidence state; the lines below it say which evidence exists.
+		// "collected" is named per evidence type: that a table exists says nothing about how
+		// many rows a statement matches.
 		const EVIDENCE_HEADLINES = {
 			static_only: 'Assessment based on SQL structure only.',
 			unavailable: 'Database evidence could not be collected.',
 			partial: 'Partial database evidence: some evidence was collected and some could not be.',
-			collected: 'Database evidence was collected.',
 			not_applicable: 'Connected to the database; no database evidence applies to this statement.'
 		};
+		const COLLECTED_HEADLINES = {
+			both: 'Collected: table metadata and an execution plan (optimizer estimates).',
+			metadata: 'Collected: table metadata only.',
+			plan: 'Collected: an execution plan only (optimizer estimates).'
+		};
+
+		function evidenceHeadline(state) {
+			if (state.overall === 'collected') {
+				const metadata = state.metadata.state === 'collected';
+				const plan = state.plan.state === 'collected';
+				return COLLECTED_HEADLINES[metadata && plan ? 'both' : plan ? 'plan' : 'metadata'];
+			}
+			return fixedMessage(EVIDENCE_HEADLINES, state.overall) || EVIDENCE_HEADLINES.unavailable;
+		}
+
+		// What is established about the rows an UPDATE or DELETE matches directly (server:
+		// scope.basis). Never a row count: at most one row is a bound, and the row may not
+		// exist. Indirect effects (triggers, foreign-key actions) are never inspected.
+		const INDIRECT_EFFECTS_NOTE = ' Triggers and foreign-key actions (such as ON DELETE CASCADE) were not checked.';
+
+		function scopeLine(s) {
+			const scope = s.scope;
+			if (!scope) return null;
+			const indirect = scope.indirect_effects === 'not_checked' ? INDIRECT_EFFECTS_NOTE : '';
+			if (scope.basis === 'all_rows') {
+				return 'Row scope: every row of ' + text(scope.table)
+					+ ' (from the SQL: no WHERE clause, or one that is always true).' + indirect;
+			}
+			if (scope.basis === 'at_most_one_row') {
+				return 'Row scope: at most one row of ' + text(scope.table) + ' matches directly, by unique key '
+					+ text(scope.index) + ' (confirmed from table metadata). The row may not exist.' + indirect;
+			}
+			if (scope.basis === 'not_established') {
+				const connected = evidenceOf(s).connection.state === 'connected';
+				return 'Row scope: not established. A WHERE clause can match zero, one, some or all rows'
+					+ (connected ? '; the database evidence did not establish how many.' : '; the SQL alone does not say how many.')
+					+ indirect;
+			}
+			return null;
+		}
 
 		function planLine(plan) {
-			if (plan.state === 'collected') return 'Execution-plan evidence was collected.';
+			if (plan.state === 'collected' && plan.interpreted === false) {
+				return 'Multi-step execution plan (' + text(plan.rows) + ' rows) collected: shown for reference, not summarised or used for scoring.';
+			}
+			if (plan.state === 'collected') return 'Execution-plan evidence was collected (optimizer estimates, not rows changed).';
 			if (plan.state === 'not_collected_read_only') return EVIDENCE_STATUS_MESSAGES.plan_not_collected_read_only;
 			if (plan.state === 'not_eligible') return EVIDENCE_STATUS_MESSAGES.plan_not_eligible;
 			if (plan.state === 'not_supported') return EVIDENCE_STATUS_MESSAGES.unsupported_statement_type;
@@ -2060,8 +3419,7 @@
 		function evidenceLayer(s) {
 			const state = evidenceOf(s);
 			const evidence = s.database_evidence || {};
-			const body = [el('p', 'evidence-headline', fixedMessage(EVIDENCE_HEADLINES, state.overall)
-				|| EVIDENCE_HEADLINES.unavailable)];
+			const body = [el('p', 'evidence-headline', evidenceHeadline(state))];
 			if (state.connection.state !== 'connected') {
 				// No connection: say why (no login entered, login rejected, unreachable, ...).
 				const reason = fixedMessage(EVIDENCE_STATUS_MESSAGES, state.connection.reason);
@@ -2071,12 +3429,13 @@
 				const plan = planLine(state.plan);
 				if (plan) body.push(el('p', 'evidence-plan', plan));
 			}
-			// Plan fields only when a plan was collected: never a grid of blanks.
-			if (state.plan.state === 'collected') {
+			// Plan fields only for a collected one-row plan: never a grid of blanks, and never
+			// the first row of a multi-step plan presented as the whole plan.
+			if (state.plan.state === 'collected' && state.plan.interpreted !== false) {
 				const grid = el('div', 'metric-grid');
 				grid.append(
 					metric('Access type', evidence.access_type),
-					metric('Estimated rows', evidence.estimated_rows == null ? 'n/a' : evidence.estimated_rows + ' (estimate)'),
+					metric('Estimated rows examined', evidence.estimated_rows == null ? 'n/a' : evidence.estimated_rows + ' (estimate)'),
 					metric('Possible keys', evidence.possible_keys && evidence.possible_keys.length ? evidence.possible_keys.join(', ') : 'n/a'),
 					metric('Selected key', evidence.key),
 					metric('Key length', evidence.key_length),
@@ -2105,16 +3464,19 @@
 				el('p', '', metadata.state === 'collected'
 					? 'Risk adjustment: ' + (adjustment > 0 ? '+' : '') + adjustment + ' points'
 					: 'Metadata-based scoring was not applied.'),
-				el('div', 'subheading', 'M1 — Table-scale risk'),
-				factorList(m1, 'No additional risk identified.'),
-				el('div', 'subheading', 'M2 — Predicate/index risk'),
-				factorList(m2, 'No additional risk identified.')
+				el('div', 'subheading', 'Table scan and estimated row volume'),
+				el('p', 'assess-detail', scanLine(s)),
+				...(m1.length ? [factorList(m1)] : []),
+				el('div', 'subheading', 'Filter and index assessment'),
+				el('p', 'assess-detail', filterLine(s)),
+				...(m2.length ? [factorList(m2)] : [])
 			];
-			return layer('METADATA ASSESSMENT', 'metadata', body);
+			return layer('PLAN AND INDEX ASSESSMENT', 'metadata', body);
 		}
 
 		function statementCard(s, index) {
 			const card = el('article', 'statement lvl-' + text(s.risk_level));
+			card.id = 'statement-' + (index + 1);
 			const head = el('div', 'statement-head');
 			const title = el('div', 'statement-title');
 			title.append(
@@ -2126,6 +3488,9 @@
 			card.append(head);
 
 			const body = el('div', 'statement-body');
+			if (s.analysis_text_differs) {
+				body.append(el('div', 'warning analysis-warning', 'The SQL could only be read partly. The analysed text below may differ from what you submitted; review the original statement by hand.'));
+			}
 			body.append(el('pre', 'sql-block', s.sql));
 
 			const metrics = el('div', 'metric-grid');
@@ -2140,22 +3505,34 @@
 			layers.append(
 				layer('FINAL RESULT', 'final', [
 					el('p', '', 'Final risk: ' + text(s.risk_level)),
+					...(scopeLine(s) ? [el('p', 'row-scope', scopeLine(s))] : []),
 					el('div', 'subheading', 'Why'),
 					plainList(s.reasons, 'No additional reasons reported.'),
 					el('div', 'subheading', 'Review checklist'),
 					plainList(s.checklist, 'No checklist items reported.')
 				]),
-				layer('STATIC ANALYSIS', 'static', [
-					el('p', '', 'Static risk: ' + text(s.static_risk_level)),
-					el('div', 'subheading', 'Static factors'),
-					factorList(s.factors, 'No additional static factors.')
-				]),
+				reasoningDetails(s),
 				evidenceLayer(s),
 				metadataLayer(s)
 			);
 			body.append(layers);
 			card.append(body);
 			return card;
+		}
+
+		// Detailed score reasoning, collapsed by default so the result reads first.
+		function reasoningDetails(s) {
+			const box = el('details', 'reasoning');
+			box.append(
+				el('summary', '', 'Score reasoning: static score ' + text(s.static_score)
+					+ ', final score ' + text(s.score) + ' (out of 100)'),
+				layer('STATIC ANALYSIS', 'static', [
+					el('p', '', 'Static risk: ' + text(s.static_risk_level)),
+					el('div', 'subheading', 'Static factors'),
+					factorList(s.factors, 'No additional static factors.')
+				])
+			);
+			return box;
 		}
 
 		const PLAN_COUNT_LABELS = {
@@ -2191,6 +3568,467 @@
 			return parts.join(' · ') || 'Connected; no database evidence applies.';
 		}
 
+		const RISK_ORDER = { CRITICAL: 3, HIGH: 2, MEDIUM: 1, LOW: 0 };
+
+		function briefSection(title, children) {
+			const box = el('section', 'brief-section');
+			box.append(el('h3', '', title));
+			children.forEach(child => box.append(child));
+			return box;
+		}
+
+		function briefList(items, empty) {
+			const list = el('ul', 'brief-list');
+			if (!items.length) list.append(el('li', 'muted', empty));
+			items.forEach(item => {
+				const row = el('li');
+				if (item.level) row.append(el('span', 'sev ' + item.level, item.level));
+				row.append(el('span', '', item.text));
+				list.append(row);
+			});
+			return list;
+		}
+
+		// What the overview and the review brief show, derived only from fields the server
+		// returned: it never calls SQL safe, never states a row count and never implies a
+		// plan that was not collected.
+		// Plan and metadata factors in a DBA's words. Estimates stay labelled as estimates.
+		function factorText(s, factor) {
+			const label = text(factor.label || factor.text || factor.code);
+			const rows = s.database_evidence && s.database_evidence.estimated_rows;
+			if (label === 'EXPLAIN indicates a full table scan') return 'Full table scan (EXPLAIN access type ALL)';
+			if (label === 'EXPLAIN estimated rows are high') {
+				return typeof rows === 'number'
+					? 'Optimizer estimate of ' + rows.toLocaleString('en-US') + rowsWord(rows) + ' examined (estimate)'
+					: 'High optimizer row estimate (estimate)';
+			}
+			if (String(factor.code || '').startsWith('M2_')) {
+				const filter = s.filter_index || {};
+				return 'Full scan, and no index starts with the filter column'
+					+ (filter.column ? ' ' + filter.column : '') + ' (table metadata)';
+			}
+			return label;
+		}
+
+		function formatRows(value) {
+			return typeof value === 'number' ? value.toLocaleString('en-US') : 'n/a';
+		}
+
+		function rowsWord(value) {
+			return value === 1 ? ' row' : ' rows';
+		}
+
+		// The plan in one line: access path and the optimizer's row estimate, never a count.
+		function scanLine(s) {
+			const plan = evidenceOf(s).plan;
+			const evidence = s.database_evidence || {};
+			if (plan.state === 'collected' && plan.interpreted === false) {
+				return 'Multi-step plan (' + text(plan.rows) + ' rows): shown under Database evidence, not summarised.';
+			}
+			if (plan.state === 'collected') {
+				const path = evidence.full_table_scan
+					? 'Full table scan (access type ALL)'
+					: 'Access type ' + text(evidence.access_type) + (evidence.key ? ' using key ' + evidence.key : ', no key used');
+				const extra = typeof evidence.extra === 'string' ? evidence.extra : '';
+				const steps = ['Using filesort', 'Using temporary'].filter(step => extra.includes(step));
+				const sorted = !steps.length ? ''
+					: ' The plan shows ' + steps.join(' and ') + (s.has_limit
+						? ': every matching row is read and sorted before LIMIT applies.'
+						: '.');
+				return path + '; optimizer estimate: ' + formatRows(evidence.estimated_rows)
+					+ rowsWord(evidence.estimated_rows) + ' examined.' + sorted;
+			}
+			if (plan.state === 'not_collected_read_only') return 'Not collected: plans are not requested for UPDATE or DELETE.';
+			if (plan.state === 'not_eligible') return 'Not collected: this statement is not eligible for a plan.';
+			if (plan.state === 'not_supported') return 'Not applicable to this statement type.';
+			if (plan.state === 'failed') return 'Collection failed. ' + (fixedMessage(EVIDENCE_STATUS_MESSAGES, plan.reason) || '');
+			return 'Not collected: no database login and database.';
+		}
+
+		// The filter and the table's indexes, from table metadata (server: filter_index).
+		function filterLine(s) {
+			const filter = s.filter_index || {};
+			const on = filter.table ? ' on ' + filter.table : '';
+			if (filter.state === 'no_filter') return 'No WHERE filter.';
+			if (filter.state === 'not_assessed') return 'Not assessed: only a single-column comparison with a value, on one table, is checked.';
+			if (filter.state === 'matching_index') return 'An index' + on + ' starts with ' + text(filter.column) + ' (table metadata). The plan shows whether MySQL uses it.';
+			if (filter.state === 'no_matching_index') return 'No index' + on + ' starts with ' + text(filter.column) + ' (table metadata).';
+			if (filter.state === 'not_checked') {
+				return 'Not checked: ' + (evidenceOf(s).connection.state === 'connected'
+					? 'complete table and index metadata were not available.' : 'no database login and database.');
+			}
+			return 'Not applicable to this statement type.';
+		}
+
+		// What the overview and the review assessment show, derived only from fields the
+		// server returned: it never calls SQL safe, never states a row count and never
+		// implies a plan that was not collected.
+		function reviewModel(data) {
+			const statements = data.statements || [];
+			const ranked = statements.map((s, index) => ({ s, n: index + 1 }))
+				.sort((a, b) => (RISK_ORDER[b.s.risk_level] || 0) - (RISK_ORDER[a.s.risk_level] || 0)
+					|| (b.s.score || 0) - (a.s.score || 0));
+			const summary = data.evidence_summary;
+			const connection = summary ? summary.connection.state : 'not_attempted';
+			const writes = statements.filter(s => s.statement_type === 'UPDATE' || s.statement_type === 'DELETE');
+
+			const limits = [];
+			if (connection === 'not_attempted') limits.push({ text: 'No database evidence: based on the SQL text only.' });
+			if (connection === 'failed') limits.push({ text: 'The database connection failed: based on the SQL text only.' });
+			ranked.forEach(({ s, n }) => {
+				const label = 'Statement ' + n + ': ';
+				if (s.parse_error) limits.push({ text: label + 'not analysed: ' + (NOT_ANALYSED_REASONS[s.analysis_status] || 'it could not be analysed') + '.' });
+				else if (s.analysis_text_differs) limits.push({ text: label + 'the SQL could only be read partly.' });
+				const state = evidenceOf(s);
+				if (state.metadata.state === 'collected') {
+					(state.metadata.tables || []).forEach(table => {
+						if (table.found === false) limits.push({ text: label + text(table.name) + ' was not found in the selected database.' });
+						else if (table.found !== true) limits.push({ text: label + 'whether ' + text(table.name) + ' exists could not be determined.' });
+					});
+				}
+				if (state.plan.state === 'failed') limits.push({ text: label + 'the execution plan could not be collected.' });
+				if (state.metadata.state === 'failed') limits.push({ text: label + 'table metadata could not be collected.' });
+				if (s.scope && s.scope.basis === 'not_established') limits.push({ text: label + 'the rows it can change are not established.' });
+			});
+
+			const findings = [];
+			ranked.forEach(({ s, n }) => {
+				[...(s.factors || []), ...(s.evidence_factors || []), ...(s.metadata_factors || [])]
+					.filter(f => f.points > 0).forEach(f => findings.push({
+						level: text(s.risk_level),
+						points: f.points,
+						n,
+						text: 'Statement ' + n + ': ' + factorText(s, f) + ' (+' + f.points + ')'
+					}));
+			});
+
+			// Highest severity first, then the largest score contribution.
+			findings.sort((a, b) => (RISK_ORDER[b.level] || 0) - (RISK_ORDER[a.level] || 0) || b.points - a.points);
+
+			const actions = [];
+			ranked.forEach(({ s }) => (s.checklist || []).forEach(item => {
+				const line = typeof item === 'string' ? item : (item.text || item.name || '');
+				if (line && !actions.some(a => a.text === line)) actions.push({ text: line });
+			}));
+
+			// Each evidence type with its state: collected, collection failed, not collected,
+			// not checked or not applicable.
+			const counts = summary && summary.metadata ? summary.metadata : {};
+			const planCounts = summary && summary.plan ? summary.plan : {};
+			const metadataParts = [];
+			if (counts.collected) metadataParts.push('collected for ' + counts.collected + ' statement(s)');
+			if (counts.failed) metadataParts.push('collection failed for ' + counts.failed + ' statement(s)');
+			if (counts.not_attempted) metadataParts.push('not collected for ' + counts.not_attempted + ' statement(s) (no database selected)');
+			const metadataText = connection === 'not_attempted' ? 'Not collected: no database login and database.'
+				: connection === 'failed' ? 'Collection failed: the database connection failed.'
+					: metadataParts.length ? metadataParts.join('; ').replace(/^./, c => c.toUpperCase()) + '.' : 'Not applicable.';
+			const planText = connection === 'not_attempted' ? 'Not collected: no database login and database.'
+				: connection === 'failed' ? 'Collection failed: the database connection failed.'
+					: (countsText(planCounts, PLAN_COUNT_LABELS) || 'not applicable').replace(/^./, c => c.toUpperCase()) + '.';
+			const metadataState = connection !== 'connected' ? 'none'
+				: counts.failed ? 'partial' : counts.collected ? 'done' : 'none';
+			const planState = connection === 'connected' && planCounts.collected ? 'done'
+				: connection === 'connected' && planCounts.failed ? 'partial' : 'none';
+			const evidenceRows = [['Static analysis', 'Collected for ' + statements.length + ' statement(s).', 'done'],
+			['Table metadata', metadataText, metadataState],
+			['Execution plan', planText, planState]];
+
+			// Unknowns that apply to this review, each with why it is unknown.
+			const unknowns = [];
+			if (writes.length) {
+				unknowns.push(['Rows changed', 'Not collected: the statement is never run. A read-only count of the candidate rows estimates it.', 'none']);
+				if (writes.some(s => s.scope && s.scope.indirect_effects === 'not_checked')) {
+					unknowns.push(['Triggers, foreign keys', 'Not checked: triggers and foreign-key actions are not inspected.', 'none']);
+				}
+			}
+			if (statements.length) {
+				unknowns.push(['Run time, locks', 'Not measured: plain EXPLAIN reports the optimizer plan; it does not measure run time or locks.', 'info']);
+			}
+			return { statements, limits, findings, actions, evidenceRows: evidenceRows.concat(unknowns), unknowns };
+		}
+
+		function evidenceTable(rows) {
+			const evidence = el('dl', 'evidence-table');
+			rows.forEach(([term, detail, coverage]) => evidence.append(
+				el('dt', coverage ? 'cov-' + coverage : '', term), el('dd', '', detail)));
+			return evidence;
+		}
+
+		// "1-3, 7" from [1, 2, 3, 7].
+		function numberRanges(numbers) {
+			const parts = [];
+			numbers.forEach((n, i) => {
+				if (i > 0 && n === numbers[i - 1] + 1) {
+					parts[parts.length - 1][1] = n;
+				} else {
+					parts.push([n, n]);
+				}
+			});
+			return parts.map(([a, b]) => (a === b ? String(a) : a + '\u2013' + b)).join(', ');
+		}
+
+		// Why a statement was not analysed (analysis_status from the API). An unsupported
+		// statement is valid MySQL; an unreadable one may or may not be valid.
+		const NOT_ANALYSED_LABELS = {
+			invalid: 'Not valid MySQL: ',
+			unsupported: 'Not analysed (not supported): ',
+			unreadable: 'Could not be read: '
+		};
+		const NOT_ANALYSED_REASONS = {
+			invalid: 'not valid MySQL',
+			unsupported: 'valid MySQL, but this statement type is not supported',
+			unreadable: 'the validator could not read it'
+		};
+
+		// One compact row per statement, in submitted order: what it is, its risk and
+		// confidence, and its largest scoring factor. Each row opens its detailed card.
+		function statementIndex(statements) {
+			const table = el('table', 'ov-table stmt-index');
+			const head = el('tr');
+			[['#', 'num'], ['Statement', ''], ['Risk', ''], ['Confidence', ''], ['Key finding', '']].forEach(([label, cls]) => {
+				const th = el('th', cls, label);
+				th.setAttribute('scope', 'col');
+				head.append(th);
+			});
+			const thead = el('thead');
+			thead.append(head);
+			const tbody = el('tbody');
+			statements.forEach((s, index) => {
+				const n = index + 1;
+				const factors = [...(s.factors || []), ...(s.evidence_factors || []), ...(s.metadata_factors || [])]
+					.filter(f => f.points > 0).sort((a, b) => b.points - a.points);
+				const key = s.parse_error ? (NOT_ANALYSED_LABELS[s.analysis_status] || 'Not analysed: ') + s.parse_error
+					: factors.length ? factorText(s, factors[0]) + ' (+' + factors[0].points + ')'
+						: 'No rule raised the score.';
+				const row = el('tr', 'stmt-row');
+				const link = el('a', '', '#' + n);
+				link.href = '#statement-' + n;
+				const number = el('td', 'num');
+				number.append(link);
+				const what = el('td', 'stmt-what', text(s.statement_type)
+					+ (s.tables && s.tables.length ? ' \u00b7 ' + s.tables.join(', ') : ''));
+				const risk = el('td');
+				risk.append(el('span', 'sev ' + text(s.risk_level), text(s.risk_level)), el('span', 'assess-points', ' ' + text(s.score)));
+				row.append(number, what, risk, el('td', '', text(s.confidence)), el('td', '', key));
+				tbody.append(row);
+			});
+			table.append(thead, tbody);
+			return table;
+		}
+
+		function assessRow(label, children) {
+			const row = el('div', 'assess-row');
+			const value = el('div', 'assess-value');
+			children.forEach(child => value.append(child));
+			row.append(el('div', 'assess-label', label), value);
+			return row;
+		}
+
+		// The primary assessment, under the summary row: the top finding, what the plan and
+		// the indexes show, what limits the result, what is unknown and what to check first.
+		// Risk, score and confidence are in the summary row above and are not repeated.
+		function primaryAssessment(data) {
+			const model = reviewModel(data);
+			const box = el('section', 'assessment');
+			box.setAttribute('aria-label', 'Primary assessment');
+
+			const top = model.findings[0];
+			const finding = el('div', 'assess-line');
+			if (top) {
+				const link = el('a', '', top.text.replace(/ \(\+\d+\)$/, ''));
+				link.href = '#statement-' + top.n;
+				finding.append(el('span', 'sev ' + top.level, top.level), link, el('span', 'assess-points', '+' + top.points));
+			} else {
+				finding.append(el('span', 'muted', 'No rule raised the score. This does not mean the SQL is safe.'));
+			}
+
+			const planned = model.statements.map((s, index) => ({ s, n: index + 1 }));
+			const showN = planned.length > 1;
+			const lines = (fn) => {
+				if (!showN) return planned.map(({ s }) => el('div', 'assess-line', fn(s)));
+				const groups = new Map();
+				planned.forEach(({ s, n }) => {
+					const textLine = fn(s);
+					if (!groups.has(textLine)) groups.set(textLine, []);
+					groups.get(textLine).push(n);
+				});
+				return [...groups].map(([textLine, numbers]) => el('div', 'assess-line',
+					(numbers.length > 1 ? 'Statements ' : 'Statement ') + numberRanges(numbers) + ': ' + textLine));
+			};
+
+			const more = (items, limit, rest) => items.length > limit
+				? [el('div', 'assess-line muted', '+' + (items.length - limit) + ' more ' + rest)] : [];
+			const listLines = (items, limit) => items.slice(0, limit).map(item => el('div', 'assess-line', item.text));
+
+			box.append(
+				assessRow('Top finding', [finding]),
+				assessRow('Execution plan', lines(scanLine)),
+				assessRow('Filter and index', lines(filterLine)),
+				assessRow('Limitations', model.limits.length
+					? [...listLines(model.limits, 3), ...more(model.limits, 3, 'in the statement details')]
+					: [el('div', 'assess-line muted', 'None identified beyond the unknowns below.')]),
+				assessRow('Unknown', model.unknowns.map(([term, detail]) => el('div', 'assess-line', term + ': ' + detail))),
+				assessRow('Check first', model.actions.length
+					? [...listLines(model.actions, 3), ...more(model.actions, 3, 'in the statement details')]
+					: [el('div', 'assess-line muted', 'No review actions reported.')]));
+			return box;
+		}
+
+		function overviewTile(label, value, detail, className) {
+			const tile = el('div', 'ov-tile' + (className ? ' ' + className : ''));
+			tile.append(el('div', 'label', label), el('strong', '', value), el('small', '', detail));
+			return tile;
+		}
+
+		function overviewPanel(title, children, className) {
+			const panel = el('section', 'ov-card' + (className ? ' ' + className : ''));
+			panel.append(el('h3', '', title));
+			children.forEach(child => panel.append(child));
+			return panel;
+		}
+
+		function actionButton(label, className, attributes) {
+			const button = el('button', className, label);
+			button.type = 'button';
+			Object.entries(attributes).forEach(([name, value]) => button.setAttribute(name, value));
+			return button;
+		}
+
+		function countBy(items, key) {
+			const counts = {};
+			items.forEach(item => { const value = text(item[key]); counts[value] = (counts[value] || 0) + 1; });
+			return Object.entries(counts).map(([value, count]) => count + ' ' + value).join(', ');
+		}
+
+		// The current review at a glance: idle, running, complete or failed. Values come only
+		// from this page's state and the last response; nothing is counted across reviews.
+		function renderOverview(status, data, message) {
+			const band = el('div', 'ov-band');
+			const model = data ? reviewModel(data) : null;
+			const limited = data && data.overall_confidence !== 'HIGH';
+
+			const statusTile = status === 'running'
+				? overviewTile('Review status', 'In progress', 'Waiting for the validator.', 'state-running')
+				: status === 'failed'
+					? overviewTile('Review status', 'Failed', message || 'The review did not complete.', 'state-failed')
+					: status === 'complete'
+						? overviewTile('Review status', limited ? 'Complete, with limitations' : 'Complete',
+							limited ? 'Read the limitations before relying on the result.' : 'All statements were assessed.',
+							limited ? 'state-warning' : 'state-complete')
+						: overviewTile('Review status', 'No review yet', 'Start a SQL review to see its assessment here.');
+			statusTile.setAttribute('role', 'status');
+
+			if (!model) {
+				const none = status === 'running' ? 'Pending' : 'No result';
+				band.append(
+					overviewTile('Overall risk', none, 'The highest statement score of the review.', 'ov-risk'),
+					overviewTile('Confidence', none, 'How well the evidence supports the assessment; not a safety rating.'),
+					overviewTile('Statements', none, 'Up to 16 MySQL statements per review.'),
+					statusTile);
+				const row = el('div', 'ov-inline' + (status === 'failed' ? ' failed' : status === 'running' ? '' : ' start'));
+				if (status === 'running') {
+					row.append(el('span', 'spinner'), el('span', '', 'Reviewing your SQL...'));
+				} else if (status === 'failed') {
+					row.setAttribute('role', 'alert');
+					row.append(el('span', '', message || 'The review did not complete.'),
+						actionButton('Back to SQL review', 'secondary', { 'data-view': 'review' }));
+				} else {
+					const lead = el('div', 'ov-start-lead');
+					lead.append(el('b', '', 'Start a SQL review'),
+						el('span', '', 'Paste the SQL from a ticket. Each statement is classified and scored, with how '
+							+ 'confident that assessment is and what to check before you run it. Your SQL is never executed.'));
+					const steps = el('ol', 'ov-start-steps');
+					[['Paste SQL', 'up to 16 statements'], ['Connect (optional)', 'adds plan and metadata evidence'],
+					['Read', 'risk, confidence, findings']].forEach(([title, note]) => {
+						const step = el('li');
+						step.append(el('b', '', title), el('span', '', note));
+						steps.append(step);
+					});
+					row.append(lead, steps, actionButton('New SQL review', 'primary', { 'data-action': 'new-review' }));
+				}
+				$('overviewBody').replaceChildren(band, row);
+				return;
+			}
+
+			const risk = el('div', 'ov-tile ov-risk lvl-' + text(data.overall_risk_level));
+			const riskValue = el('strong');
+			riskValue.append(el('span', 'risk-badge ' + text(data.overall_risk_level), text(data.overall_risk_level)),
+				el('span', 'visually-hidden', ' · '), el('span', '', text(data.overall_score) + ' / 100'));
+			risk.append(el('div', 'label', 'Overall risk'), riskValue,
+				el('small', '', 'Highest statement score; not a sum or an average.'));
+			band.append(risk,
+				overviewTile('Confidence', text(data.overall_confidence),
+					'Lowest statement confidence. How well the evidence supports the assessment; not a safety rating.'),
+				overviewTile('Statements', String(model.statements.length),
+					(countBy(model.statements, 'statement_type') || 'None') + '. By risk: '
+					+ (countBy(model.statements, 'risk_level') || 'none') + '.'),
+				statusTile);
+
+			// The highest-risk statement and its row scope, as reported.
+			const top = model.statements.map((s, index) => ({ s, n: index + 1 }))
+				.sort((a, b) => (RISK_ORDER[b.s.risk_level] || 0) - (RISK_ORDER[a.s.risk_level] || 0)
+					|| (b.s.score || 0) - (a.s.score || 0))[0];
+			const headline = el('p', 'ov-headline');
+			if (top) {
+				headline.append(el('b', '', 'Highest risk: statement ' + top.n + ' · ' + text(top.s.statement_type)
+					+ (top.s.tables && top.s.tables.length ? ' · ' + top.s.tables.join(', ') : '') + '. '),
+					el('span', '', scopeLine(top.s) || ''));
+			}
+
+			const table = el('table', 'ov-table');
+			const thead = el('thead');
+			const headRow = el('tr');
+			[['Severity', ''], ['Statement', ''], ['Finding', ''], ['Points', 'num']].forEach(([label, cls]) => {
+				const th = el('th', cls, label);
+				th.setAttribute('scope', 'col');
+				headRow.append(th);
+			});
+			thead.append(headRow);
+			const tbody = el('tbody');
+			model.findings.slice(0, 8).forEach(finding => {
+				const row = el('tr', 'ov-finding');
+				const severity = el('td');
+				severity.append(el('span', 'sev ' + finding.level, finding.level));
+				const cell = el('td');
+				const link = el('a', '', finding.text.replace(/^Statement \d+: /, '').replace(/ \(\+\d+\)$/, ''));
+				link.href = '#statement-' + finding.n;
+				cell.append(link);
+				row.append(severity, el('td', 'stmt', '#' + finding.n), cell, el('td', 'num', '+' + finding.points));
+				tbody.append(row);
+			});
+			table.append(thead, tbody);
+			const findingsSection = el('section', 'ov-section');
+			findingsSection.append(el('h3', '', 'Priority findings'),
+				model.findings.length ? table : el('p', 'ov-empty-note', 'No rule raised the score. This does not mean the SQL is safe.'));
+			const open = el('div', 'ov-card-foot');
+			open.append(actionButton('Open full review', 'secondary', { 'data-view': 'review' }));
+			findingsSection.append(open);
+
+			const actionsList = el('ol', 'ov-actions');
+			model.actions.slice(0, 6).forEach(action => actionsList.append(el('li', '', action.text)));
+			const actionsSection = el('section', 'ov-section');
+			actionsSection.append(el('h3', '', 'DBA actions'),
+				model.actions.length ? actionsList : el('p', 'ov-empty-note', 'No review actions reported.'));
+			const evidenceSection = el('section', 'ov-section');
+			evidenceSection.append(el('h3', '', 'Evidence'), evidenceTable(model.evidenceRows));
+			const limitsSection = el('section', 'ov-section');
+			limitsSection.append(el('h3', '', 'Limitations'), briefList(model.limits, ''));
+			const side = el('div', 'ov-side');
+			side.append(actionsSection, evidenceSection, limitsSection);
+
+			const layout = el('div', 'ov-layout');
+			layout.append(findingsSection, side);
+			$('overviewBody').replaceChildren(band, headline, layout);
+		}
+
+		function renderLoading() {
+			const box = el('div', 'loading');
+			box.setAttribute('role', 'status');
+			box.append(el('span', 'spinner'), el('span', '', 'Reviewing your SQL...'));
+			$('results').replaceChildren(box);
+			renderOverview('running');
+		}
+
 		function renderResults(data) {
 			$('results').replaceChildren();
 
@@ -2216,18 +4054,31 @@
 				el('small', 'evidence-summary', evidenceSummaryText(data.evidence_summary))
 			);
 
-			summary.append(aggregate, score, mode);
-			$('results').append(summary);
+			const confidence = el('div', 'summary-cell');
+			confidence.append(
+				el('div', 'label', 'Batch confidence'),
+				el('strong', '', text(data.overall_confidence || 'n/a')),
+				el('small', '', 'Lowest statement confidence; not a safety rating')
+			);
+
+			summary.append(aggregate, score, mode, confidence);
+			$('results').append(summary, primaryAssessment(data));
+			if (data.statements.length > 1) {
+				$('results').append(el('h3', 'details-heading', 'Statements'), statementIndex(data.statements));
+			}
+			$('results').append(el('h3', 'details-heading', 'Statement details'));
 
 			data.statements.forEach((statement, index) => {
 				$('results').append(statementCard(statement, index));
 			});
+			renderOverview('complete', data);
 		}
 
 		function renderError(message) {
 			const box = el('div', 'error-box', message);
 			box.setAttribute('role', 'alert');
 			$('results').replaceChildren(box);
+			renderOverview('failed', null, message);
 		}
 
 		// Event listeners
@@ -2235,6 +4086,47 @@
 		testBtn.addEventListener('click', testConnection);
 		discoverBtn.addEventListener('click', discoverDatabases);
 		validateBtn.addEventListener('click', validateSql);
+		// Two views in one page: the dashboard and the SQL review workspace. Switching is
+		// page state only; the current review stays in both.
+		const VIEWS = ['dashboard', 'review'];
+		function showView(name) {
+			VIEWS.forEach(view => { $(view + 'View').hidden = view !== name; });
+			document.querySelectorAll('.nav-item').forEach(item => {
+				const active = item.getAttribute('data-view') === name;
+				item.classList.toggle('active', active);
+				if (active) item.setAttribute('aria-current', 'page');
+				else item.removeAttribute('aria-current');
+			});
+			window.scrollTo(0, 0);
+		}
+
+		function startReview() {
+			showView('review');
+			sqlInput.focus();
+		}
+
+		function openStatement(id) {
+			const card = $(id);
+			showView('review');
+			if (!card) return;
+			card.setAttribute('tabindex', '-1');
+			card.scrollIntoView({ block: 'start' });
+			card.focus({ preventScroll: true });
+		}
+
+		document.addEventListener('click', event => {
+			const link = event.target.closest('#overview a[href^="#statement-"], .assessment a[href^="#statement-"], .stmt-index a[href^="#statement-"]');
+			if (link) {
+				event.preventDefault();
+				openStatement(link.getAttribute('href').slice(1));
+				return;
+			}
+			const control = event.target.closest('[data-view], [data-action="new-review"]');
+			if (!control) return;
+			if (control.getAttribute('data-action') === 'new-review') startReview();
+			else showView(control.getAttribute('data-view'));
+		});
+		renderOverview('idle');
 		pairBtn.addEventListener('click', pairConnector);
 		unpairBtn.addEventListener('click', unpairConnector);
 		loadTargetsBtn.addEventListener('click', loadApprovedTargets);

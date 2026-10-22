@@ -255,6 +255,34 @@ are in [SECURITY.md](SECURITY.md).
 The detailed matrix, including what each check covers, is in
 [VERIFICATION.md](VERIFICATION.md).
 
+### Changes on main after v0.4.1 (not yet released)
+
+The main branch revises how evidence, risk and confidence relate. The v0.4.1
+download does not include these changes.
+
+- A `WHERE` clause, or a column named `id` or `*_id`, no longer lowers a
+  write's risk. Only a primary key or unique index confirmed from table
+  metadata can bound a write to at most one row, and the result says so. Such
+  a write is still at least `MEDIUM`: the key bounds the target row, not
+  triggers or foreign-key actions.
+- Each write shows its row scope: every row, at most one row, or not
+  established.
+- Company Mode connections are now read-only, like local ones, and MySQL must
+  confirm it. Plans for `UPDATE`/`DELETE` are never requested, so no write
+  privilege is needed.
+- Confidence is `LOW` when the SQL could only be read partly, and batches
+  report their lowest statement confidence.
+- A `WHERE` that is always true (`WHERE 1`, `WHERE id = 5 OR 1`) is treated
+  like no `WHERE`: every row, `CRITICAL`.
+- `EXPLAIN ANALYZE` is scored as the statement it runs, and `EXPLAIN` of a
+  write is no longer reported as harmless.
+- Execution plans are requested only for a `SELECT` whose function calls are
+  all on a reviewed list of MySQL built-ins. Row scope says that triggers and
+  foreign-key actions were not checked.
+
+The full contract is in
+[docs/v2-database-evidence-contract.md](docs/v2-database-evidence-contract.md).
+
 ---
 
 ## Running beyond one machine

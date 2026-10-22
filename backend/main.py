@@ -1,11 +1,13 @@
 from __future__ import annotations
-from .m2_scoring import apply_m2_adjustment
+from .m2_scoring import apply_m2_adjustment, describe_filter_index
 from .metadata_scoring import apply_m1_adjustment
 from .metadata import MetadataEvidence, collect_metadata
-from .evidence_scoring import apply_evidence_adjustments
+from .evidence_scoring import apply_evidence_adjustments, plan_is_interpretable
+from .row_scope import AT_MOST_ONE_ROW, build_row_scope
 from .db_evidence import (
     PLAN_NOT_ELIGIBLE,
     DatabaseEvidence,
+    ReadOnlySessionLost,
     collect_statement_evidence,
     evidence_status,
     select_not_eligible_for_plan,
@@ -33,9 +35,15 @@ from .db import (
 )
 from pydantic import BaseModel as PydanticBaseModel
 from dataclasses import asdict, replace
-from .risk_engine import score_statement
+from .risk_engine import (
+    OFFLINE_ROW_IMPACT_REASON,
+    CONFIDENCE_ORDER,
+    ScoreFactor,
+    score_statement,
+    weakest_confidence,
+)
 from .analyzer import analyze_batch
-from .parser import parse_sql
+from .parser import parse_sql, unsupported_script
 from .version import APP_VERSION
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from fastapi.staticfiles import StaticFiles
@@ -115,6 +123,27 @@ FRONTEND_DIR = (
 
 MAX_SQL_BYTES = 64 * 1024
 MAX_STATEMENTS = 16
+
+
+def script_error(sql: str, all_facts: list) -> str | None:
+    """The error code when a request has nothing to assess or cannot be split into
+    statements reliably; None when its statements can be assessed one by one.
+    Shared by local /api/validate and the connector's remote validate.
+
+    - "no_statements": empty, whitespace-only or comment-only input. There is nothing
+      to assess, so no risk level or confidence is returned (never "LOW").
+    - "delimiter_not_supported" / "stored_program_not_supported": see
+      backend.parser.unsupported_script.
+    - "statement_limit_exceeded": more than MAX_STATEMENTS statements.
+    """
+    if not all_facts:
+        return "no_statements"
+    unsupported = unsupported_script(sql)
+    if unsupported is not None:
+        return unsupported
+    if len(all_facts) > MAX_STATEMENTS:
+        return "statement_limit_exceeded"
+    return None
 
 
 class TargetClass(str, Enum):
@@ -388,8 +417,9 @@ def validate(req: ValidateRequest):
 
     # Parse SQL into StatementFacts
     all_facts = parse_sql(req.sql)
-    if len(all_facts) > MAX_STATEMENTS:
-        return {"error": "statement_limit_exceeded"}
+    error = script_error(req.sql, all_facts)
+    if error is not None:
+        return {"error": error}
 
     # Analyze statements into the V2 StatementAnalysis (findings, evidence gaps, recommendations, dimensions)
     analyses = analyze_batch(all_facts)
@@ -429,32 +459,45 @@ def validate(req: ValidateRequest):
     try:
         for report, analysis in zip(reports, analyses):
             static_report = report
+            statement_connection = connection
             if evidence_connection is None:
                 # Remote targets never reach here with a connection (fail-closed), and a
                 # local request without a usable connection reports why.
                 evidence = DatabaseEvidence(available=False, error=connection_status)
                 metadata = None
             else:
+                lost = False
                 try:
                     if select_not_eligible_for_plan(report.facts):
                         evidence = DatabaseEvidence(available=False, error=PLAN_NOT_ELIGIBLE)
                     else:
                         evidence = collect_statement_evidence(
-                            report.facts.raw_sql, connection=evidence_connection)
+                            report.facts.raw_sql, connection=evidence_connection,
+                            source_facts=report.facts)
+                except ReadOnlySessionLost:
+                    lost = True
+                    evidence = DatabaseEvidence(available=False, error="collection_failed")
                 except Exception:
                     evidence = DatabaseEvidence(
                         available=False, error="collection_failed")
-                try:
-                    metadata = collect_metadata(
-                        report.facts.tables,
-                        connection=evidence_connection,
-                        database=req.database,
-                    )
-                except Exception:
-                    metadata = MetadataEvidence(status="unavailable")
+                if lost:
+                    # The collector closed the connection: nothing more is collected on it.
+                    evidence_connection = None
+                    connection_status = "collection_failed"
+                    connection = connection_failed(connection_status)
+                    metadata = None
+                else:
+                    try:
+                        metadata = collect_metadata(
+                            report.facts.tables,
+                            connection=evidence_connection,
+                            database=req.database,
+                        )
+                    except Exception:
+                        metadata = MetadataEvidence(status="unavailable")
 
             statements.append(build_statement_result(
-                static_report, analysis, evidence, metadata, connection))
+                static_report, analysis, evidence, metadata, statement_connection))
     finally:
         if evidence_connection is not None:
             try:
@@ -487,10 +530,86 @@ def batch_result(statements: list[dict], connection: EvidenceConnection) -> dict
         "statement_count": len(statements),
         "overall_score": overall_score,
         "overall_risk_level": overall_risk_level,
+        # A batch is only as well understood as its least understood statement.
+        "overall_confidence": (weakest_confidence([statement["confidence"] for statement in statements])
+                               if statements else None),
         "analysis_mode": derive_analysis_mode(evidence_states),
         "evidence_summary": summarize_evidence(connection, evidence_states),
         "statements": statements,
     }
+
+
+# Verified unique-key scope: replaces the +5 "affected-row count cannot be established"
+# factor and credits -5, and only when MySQL table metadata confirms the key.
+SCOPE_VERIFIED_POINTS = -10
+
+# The credit never takes a write below MEDIUM (score 20). A verified key bounds the
+# directly matched rows of the target table; it does not establish the total data
+# impact (triggers, foreign-key actions, whether the row exists or changes). So a
+# verified one-row UPDATE/DELETE is MEDIUM at least: the credit can lower a score
+# within MEDIUM or above, never to LOW.
+SCOPE_VERIFIED_RISK_FLOOR = 20
+SCOPE_FLOOR_REASON = (
+    "MEDIUM is the minimum overall risk for an UPDATE or DELETE whose direct match is "
+    "bounded by a verified unique key: the bound covers the target row only, not the "
+    "total data impact."
+)
+
+
+INDIRECT_EFFECTS_NOT_CHECKED = (
+    "Triggers, foreign-key actions (ON DELETE / ON UPDATE CASCADE, SET NULL) and other "
+    "indirect effects on other rows or tables were not checked."
+)
+
+
+def scope_reason(scope: dict) -> str:
+    return (f"At most one row of {scope['table']} can match directly: the WHERE clause fixes every "
+            f"column of unique key {scope['index']} (from table metadata). The row may not exist, "
+            "and an UPDATE can change fewer rows than it matches. " + INDIRECT_EFFECTS_NOT_CHECKED)
+
+
+def apply_scope_adjustment(report, scope: dict):
+    """The score credit for a verified unique-key scope, or (report, None, False).
+
+    Returns (report, factor, floor_applied). The credit is SCOPE_VERIFIED_POINTS but
+    never takes the score below SCOPE_VERIFIED_RISK_FLOOR (MEDIUM); the factor carries
+    the points actually applied, which can be 0. Scope and confidence are unaffected:
+    the verified key is still reported as the target's direct row scope.
+    """
+    if scope["basis"] != AT_MOST_ONE_ROW or report.risk_level == "CRITICAL":
+        return report, None, False
+    credited = max(0, min(100, report.score + SCOPE_VERIFIED_POINTS))
+    score = max(credited, min(report.score, SCOPE_VERIFIED_RISK_FLOOR))
+    floor_applied = score > credited
+    factor = ScoreFactor(f"Unique key {scope['index']} limits the match to at most one row",
+                         score - report.score)
+    reasons = [scope_reason(scope) if reason == OFFLINE_ROW_IMPACT_REASON else reason
+               for reason in report.findings]
+    if floor_applied:
+        reasons.append(SCOPE_FLOOR_REASON)
+    return (replace(report, score=score, risk_level=risk_level_from_score(score), findings=reasons),
+            factor, floor_applied)
+
+
+def _cap(level: str, ceiling: str) -> str:
+    return level if CONFIDENCE_ORDER[level] <= CONFIDENCE_ORDER[ceiling] else ceiling
+
+
+def final_confidence(static_confidence: str, scope: dict, state: dict) -> str:
+    """Statement confidence: the static level, raised only by a verified row scope, capped.
+
+    Missing or failed evidence never raises it. A unique key confirmed in table
+    metadata establishes the row scope of a write (HIGH unless the SQL was unreadable).
+    A referenced table that metadata did not find, or whose existence could not be
+    determined, caps it at LIMITED: the assessment may be about the wrong schema.
+    """
+    level = static_confidence
+    if scope["basis"] == AT_MOST_ONE_ROW and level != "LOW":
+        level = "HIGH"
+    tables = state["metadata"].get("tables") or []
+    if any(table.get("found") is not True for table in tables):
+        level = _cap(level, "LIMITED")
+    return level
 
 
 def build_statement_result(static_report, analysis, evidence: DatabaseEvidence,
@@ -511,24 +630,33 @@ def build_statement_result(static_report, analysis, evidence: DatabaseEvidence,
     state = build_evidence_state(connection, evidence, metadata, list(static_report.facts.tables))
     if metadata is None:
         metadata = MetadataEvidence(status="unavailable")
-    evidence_result = apply_evidence_adjustments(static_report, evidence)
+    scope = build_row_scope(static_report.facts, metadata)
+    scoped_report, scope_factor, floor_applied = apply_scope_adjustment(static_report, scope)
+    # points: the change actually applied (0 when the MEDIUM floor absorbs the credit).
+    scope["factor"] = ({"label": scope_factor.label, "points": scope_factor.points,
+                        "medium_floor_applied": floor_applied}
+                       if scope_factor else None)
+    # Plan fields describe EXPLAIN's first row: only a one-row plan is interpreted.
+    interpreted = evidence if plan_is_interpretable(evidence) else replace(evidence, full_table_scan=None)
+    evidence_result = apply_evidence_adjustments(scoped_report, evidence)
     phase2_report = evidence_result.report
 
     m1_result = apply_m1_adjustment(
         phase2_report,
         metadata,
-        full_table_scan=evidence.full_table_scan,
+        full_table_scan=interpreted.full_table_scan,
         high_estimated_rows_applied=evidence_result.high_estimated_rows_applied,
         risk_level_for_score=risk_level_from_score,
     )
     m2_result = apply_m2_adjustment(
         m1_result.report,
         metadata,
-        evidence,
+        interpreted,
         risk_level_for_score=risk_level_from_score,
         phase2_risk_level=phase2_report.risk_level,
     )
     final_report = m2_result.report
+    confidence = final_confidence(static_report.confidence, scope, state)
     metadata_factors = [
         *m1_result.metadata_factors,
         *m2_result.factors,
@@ -547,11 +675,18 @@ def build_statement_result(static_report, analysis, evidence: DatabaseEvidence,
         "has_limit": final_report.facts.has_limit,
         "is_full_table_ddl": final_report.facts.is_full_table_ddl,
         "parse_error": final_report.facts.parse_error,
+        # "analysed", or why not: "invalid", "unsupported" or "unreadable" (backend.parser).
+        "analysis_status": final_report.facts.analysis_status,
         "static_score": static_report.score,
         "static_risk_level": static_report.risk_level,
         "score": final_report.score,
         "risk_level": final_report.risk_level,
-        "confidence": final_report.confidence,
+        "confidence": confidence,
+        "static_confidence": static_report.confidence,
+        # What is established about the rows an UPDATE/DELETE matches (backend.row_scope).
+        "scope": scope,
+        # The SQL could only be read partly: the analysed text may differ from the submitted text.
+        "analysis_text_differs": bool(final_report.facts.lossy_parse),
         "factors": [
             {"label": factor.label, "points": factor.points}
             for factor in static_report.factors
@@ -564,13 +699,36 @@ def build_statement_result(static_report, analysis, evidence: DatabaseEvidence,
         "metadata_factors": [asdict(factor) for factor in metadata_factors],
         "metadata_status": metadata.status,
         "high_estimated_rows_applied": evidence_result.high_estimated_rows_applied,
+        # Filter and index assessment from table metadata (display only; see m2_scoring).
+        "filter_index": describe_filter_index(final_report.facts, metadata),
         "reasons": restate_reasons(final_report.reasons, state),
         "checklist": final_report.checklist,
     }
 
     if analysis.assessment is not None:
         try:
-            payload["v2_assessment"] = asdict(restate_assessment(analysis.assessment, state))
+            assessment = restate_assessment(analysis.assessment, state)
+            # The analyzer's score fields are placeholders; never return them as a result.
+            assessment = replace(assessment, overall_score=final_report.score,
+                                 risk_level=final_report.risk_level, confidence=confidence)
+            if scope["basis"] == AT_MOST_ONE_ROW:
+                # The direct match is bounded; the total data impact is not: Data Risk
+                # keeps its level, and the unknown-count finding says what is still open.
+                direct = (f"Direct match: at most one row of {scope['table']} "
+                          f"(unique key {scope['index']}, from table metadata). ")
+                assessment = replace(
+                    assessment,
+                    dimensions=[
+                        replace(dimension, reason=direct + INDIRECT_EFFECTS_NOT_CHECKED)
+                        if dimension.name == "Data Risk" else dimension
+                        for dimension in assessment.dimensions],
+                    findings=[
+                        replace(finding, title="Direct match bounded; total impact not established",
+                                description=direct + "Whether the row exists and how many rows change "
+                                "are not known. " + INDIRECT_EFFECTS_NOT_CHECKED)
+                        if finding.title == "Affected-row count is unknown" else finding
+                        for finding in assessment.findings])
+            payload["v2_assessment"] = asdict(assessment)
         except Exception:
             payload["v2_assessment"] = None
 

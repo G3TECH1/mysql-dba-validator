@@ -1,3 +1,5 @@
+import pytest
+
 from backend.db_evidence import DatabaseEvidence
 from backend.evidence_scoring import apply_evidence_adjustments
 from backend.main import ValidateRequest, validate
@@ -12,6 +14,8 @@ def static_report(sql: str):
 
 
 def evidence(**kwargs):
+    # A one-row plan: its fields describe the whole plan, so they may be interpreted.
+    kwargs.setdefault("plan_row_count", 1)
     return DatabaseEvidence(available=True, explain_available=True, **kwargs)
 
 
@@ -90,25 +94,64 @@ def test_high_estimated_rows_adds_estimate_factor_without_claiming_exact_count()
     assert adjusted.high_estimated_rows_applied is True
 
 
-def test_high_estimate_is_not_a_dml_adjustment_for_select():
+def test_a_select_plan_is_scored_as_load_and_limit_drops_only_the_row_volume():
+    # The score is operational severity if the statement runs (contract 8.1): a large
+    # optimizer estimate is load even for a read. With LIMIT and no sort, MySQL may stop
+    # early: the full scan still counts, the row-volume estimate does not.
     report = static_report("SELECT * FROM users;")
     adjusted = apply_evidence_adjustments(
         report,
         evidence(access_type="ALL", estimated_rows=10000, full_table_scan=False),
     )
-    assert adjusted.report.score == report.score == 0
+    assert report.score == 0 and adjusted.report.score == 10
+    assert adjusted.high_estimated_rows_applied is True
+    assert [f.label for f in adjusted.factors] == ["EXPLAIN estimated rows are high"]
+    assert any("estimate, not a measured count" in reason for reason in adjusted.report.findings)
+
+    limited = static_report("SELECT * FROM users LIMIT 10;")
+    adjusted = apply_evidence_adjustments(
+        limited,
+        evidence(access_type="ALL", estimated_rows=10000, full_table_scan=True),
+    )
+    assert adjusted.report.score == limited.score + 10
+    assert [f.label for f in adjusted.factors] == ["EXPLAIN indicates a full table scan"]
     assert adjusted.high_estimated_rows_applied is False
-    assert not any("estimated rows are high" in f.label.lower() for f in adjusted.factors)
+
+    sorted_limit = apply_evidence_adjustments(
+        limited,
+        evidence(access_type="ALL", estimated_rows=10000, full_table_scan=True, extra="Using filesort"),
+    )
+    assert sorted_limit.report.score == limited.score + 20 and sorted_limit.high_estimated_rows_applied is True
 
 
-def test_indexed_access_gets_only_a_modest_reduction():
+@pytest.mark.parametrize("access_type,key,rows", [
+    ("ref", "idx_users_status", 7),
+    ("ref", "idx_users_status", 9_000),
+    ("range", "idx_users_status", 12),
+    ("eq_ref", "PRIMARY", 1),
+    ("const", "PRIMARY", 1),
+])
+def test_index_access_never_reduces_risk(access_type, key, rows):
+    """W11: no access type lowers a score. `ref` cannot select a single row by
+    definition, and a narrow scope comes only from a unique key in table metadata."""
     report = static_report("UPDATE users SET active = 0 WHERE status = 'pending';")
     adjusted = apply_evidence_adjustments(
         report,
-        evidence(access_type="ref", key="idx_users_status", estimated_rows=7, full_table_scan=False),
+        evidence(access_type=access_type, key=key, estimated_rows=rows, full_table_scan=False),
     )
-    assert adjusted.report.score == 17
-    assert any(f.points == -3 and "indexed" in f.label.lower() for f in adjusted.factors)
+    assert adjusted.report.score == report.score
+    assert adjusted.factors == []
+    assert not any("selective" in finding.lower() for finding in adjusted.report.findings)
+
+
+def test_multi_row_plan_is_not_interpreted():
+    """Plan fields describe EXPLAIN's first row only, so a multi-row plan is not scored."""
+    report = static_report("UPDATE users SET active = 0 WHERE status = 'pending';")
+    adjusted = apply_evidence_adjustments(
+        report,
+        evidence(access_type="ALL", estimated_rows=50_000, full_table_scan=True, plan_row_count=2),
+    )
+    assert adjusted.report.score == report.score and adjusted.factors == []
 
 
 def test_ambiguous_evidence_does_not_reduce_risk():
@@ -131,16 +174,6 @@ def test_delete_high_estimate_adds_only_estimate_factor():
     assert adjusted.report.score == 35
     assert len(adjusted.factors) == 1
     assert adjusted.factors[0].points == 10
-
-
-def test_delete_indexed_access_gets_modest_reduction():
-    report = static_report("DELETE FROM users WHERE status = 'inactive';")
-    adjusted = apply_evidence_adjustments(
-        report,
-        evidence(access_type="eq_ref", key="PRIMARY", estimated_rows=1, full_table_scan=False),
-    )
-    assert adjusted.report.score == 22
-    assert adjusted.factors[0].points == -3
 
 
 def test_combined_write_evidence_has_two_explicit_adjustments():

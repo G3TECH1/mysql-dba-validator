@@ -14,50 +14,41 @@ from . import models
 NO_CONNECTION_REASON = "No database connection"
 
 
+# Manual guidance only. The validator never derives a query from submitted SQL: a
+# COUNT(*) or EXPLAIN text built by string substitution can be wrong SQL, or count
+# something else, for joins, aliases, CTEs and multi-table writes.
+AFFECTED_ROW_COUNT_CHECK = (
+    "Review the candidate rows with a read-only query you write for this statement's actual "
+    "target table and predicate. A count is a point-in-time check: concurrent changes can alter "
+    "what the write later affects, and UPDATE reports changed rows, not matched rows."
+)
+EXECUTION_PLAN_CHECK = (
+    "Run EXPLAIN on the exact statement; EXPLAIN does not run an UPDATE or DELETE. Never use "
+    "EXPLAIN ANALYZE for a review: it executes the statement."
+)
+
+
 def affected_row_count_gap(table: Optional[str], predicate: Optional[str] = None) -> models.EvidenceGap:
-    """Return an EvidenceGap suggesting a SELECT COUNT(*) check for the target.
+    """Return the gap for the unknown affected-row count, with manual guidance.
 
-    If table is provided, include a concrete SQL snippet; otherwise return a
-    generic suggestion.
+    table and predicate are accepted for compatibility and deliberately not
+    interpolated into SQL.
     """
-
-    if table:
-        if predicate:
-            suggested = f"SELECT COUNT(*) FROM {table} WHERE {predicate};"
-        else:
-            suggested = f"SELECT COUNT(*) FROM {table};"
-    else:
-        if predicate:
-            suggested = "Run SELECT COUNT(*) with the intended WHERE predicate against the target table."
-        else:
-            suggested = "Run SELECT COUNT(*) against the target table."
 
     return models.EvidenceGap(
         name="affected_row_count",
         reason=NO_CONNECTION_REASON,
-        suggested_check=suggested,
+        suggested_check=AFFECTED_ROW_COUNT_CHECK,
     )
 
 
 def execution_plan_gap(table: Optional[str], predicate: Optional[str] = None, stmt_type: str = "UPDATE") -> models.EvidenceGap:
-    """Return an EvidenceGap suggesting an EXPLAIN check for the statement.
-
-    The suggested SQL will be a best-effort human-readable hint and not
-    intended for direct execution without minor edits (e.g. the "SET ..."
-    placeholder remains for clarity where necessary).
-    """
-
-    if table and predicate:
-        suggested = f"EXPLAIN {stmt_type} {table} SET ... WHERE {predicate};"
-    elif table:
-        suggested = f"EXPLAIN {stmt_type} {table} ...;"
-    else:
-        suggested = "Run EXPLAIN on the statement to inspect the execution plan."
+    """Return the gap for the missing execution plan, with manual guidance."""
 
     return models.EvidenceGap(
         name="execution_plan",
         reason=NO_CONNECTION_REASON,
-        suggested_check=suggested,
+        suggested_check=EXECUTION_PLAN_CHECK,
     )
 
 

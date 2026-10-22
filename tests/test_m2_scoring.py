@@ -66,6 +66,7 @@ def evidence(full_table_scan=True, explain_available=True):
         available=explain_available,
         explain_available=explain_available,
         full_table_scan=full_table_scan,
+        plan_row_count=1,
     )
 
 
@@ -88,14 +89,20 @@ def test_update_and_delete_positive_without_leading_index():
         assert [factor.code for factor in result.factors] == [M2_FACTOR_CODE]
 
 
-def test_select_critical_and_no_where_are_rejected():
+def test_critical_and_no_where_are_rejected():
     cases = [
-        report("SELECT * FROM users WHERE status = 'pending';"),
         replace(report(), risk_level="CRITICAL"),
         report("UPDATE users SET active = 0;"),
+        report("SELECT * FROM users;"),
     ]
     for item in cases:
         assert score(item).adjustment == 0
+
+
+def test_a_select_filter_with_no_matching_index_is_scored_like_a_write():
+    # The score is operational severity if the statement runs (contract 8.1): a full scan
+    # whose filter column leads no index is the same load for a read as for a write.
+    assert score(report("SELECT * FROM users WHERE status = 'pending';")).adjustment == 5
 
 
 def test_joins_and_self_joins_are_rejected():

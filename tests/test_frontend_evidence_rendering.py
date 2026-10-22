@@ -24,7 +24,7 @@ from fastapi.encoders import jsonable_encoder
 
 import backend.db as backend_db
 from tests import test_connector_remote_evidence as remote
-from tests.test_local_evidence_credentials import DECOY, FakeMySQL, mysql_error, post
+from tests.test_local_evidence_credentials import DECOY, FakeMySQL, explain_row, mysql_error, post
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 CHROME_CANDIDATES = (
@@ -37,12 +37,32 @@ HEADLINES = {
     "static_only": "Assessment based on SQL structure only.",
     "unavailable": "Database evidence could not be collected.",
     "partial": "Partial database evidence: some evidence was collected and some could not be.",
-    "collected": "Database evidence was collected.",
     "not_applicable": "Connected to the database; no database evidence applies to this statement.",
 }
-READ_ONLY_PLAN = "Execution plan not collected because the evidence connection is read-only."
+# "collected" names what was collected: table metadata alone says nothing about row counts.
+COLLECTED_HEADLINES = {
+    "both": "Collected: table metadata and an execution plan (optimizer estimates).",
+    "metadata": "Collected: table metadata only.",
+    "plan": "Collected: an execution plan only (optimizer estimates).",
+}
+
+
+def expected_headline(state):
+    if state["overall"] != "collected":
+        return HEADLINES[state["overall"]]
+    metadata = state["metadata"]["state"] == "collected"
+    plan = state["plan"]["state"] == "collected"
+    return COLLECTED_HEADLINES["both" if metadata and plan else "plan" if plan else "metadata"]
+
+
+# Review L4: states the validator's policy, not unverified MySQL 8.4 behaviour.
+READ_ONLY_PLAN = ("Execution plan not requested: the validator does not request plans for UPDATE or DELETE, "
+                  "because evidence connections are read-only and it never asks for write access.")
+INDIRECT = " Triggers and foreign-key actions (such as ON DELETE CASCADE) were not checked."
+PLAN_COLLECTED = "Execution-plan evidence was collected (optimizer estimates, not rows changed)."
 NOT_ELIGIBLE_PLAN = ("No execution plan was requested: this statement is not eligible for planning "
-                     "(for example SELECT ... INTO).")
+                     "(for example SELECT ... INTO, or a function call that is not on the reviewed list "
+                     "of MySQL built-ins).")
 DUMP_DOM_DEADLINE_SECONDS = 120
 
 
@@ -123,6 +143,18 @@ def remote_fixture(sql, server, **kwargs):
         return jsonable_encoder(response.json())
 
 
+BATCH_16 = [
+    "INSERT INTO orders (id, status) VALUES (1, 'new')", "SELECT * FROM orders WHERE id = 1",
+    "UPDATE orders SET status = 'x' WHERE id = 1", "DELETE FROM orders WHERE id = 1",
+    "INSERT INTO orders (id, status) VALUES (2, 'new')", "SELECT COUNT(*) FROM orders",
+    "UPDATE orders SET status = 'x' WHERE id = 2", "DELETE FROM orders WHERE id = 2",
+    "UPDATE orders SET status = 'x' WHERE created_at < '2024-01-01'", "SELECT * FROM orders",
+    "DELETE FROM orders", "INSERT INTO orders (id, status) VALUES (3, 'new')",
+    "SELECT * FROM orders WHERE id = 3", "UPDATE orders SET status = 'y' WHERE id > 0",
+    "DELETE FROM orders WHERE id = 3", "SELECT * FROM orders WHERE status = 'old'",
+]
+
+
 def build_fixtures() -> dict:
     missing_orders = FakeMySQL()
     real = missing_orders.rows_for
@@ -155,6 +187,25 @@ def build_fixtures() -> dict:
         "missing_table": local_fixture("UPDATE orders SET active = 0 WHERE id = 1", missing_orders),
         "remote_dml": remote_fixture("UPDATE users SET active = 0 WHERE status = 'old'",
                                      remote.FakeServer(explain=[remote.explain_row("ALL", 500)])),
+        # Metadata confirms PRIMARY (id, int): the only narrow-scope proof.
+        "verified_key": local_fixture("UPDATE users SET active = 0 WHERE id = 1"),
+        # The same SQL with no database: a column named id proves nothing.
+        "static_key": local_fixture("UPDATE users SET active = 0 WHERE id = 1", username=None, password=None),
+        "no_where": local_fixture("DELETE FROM users", username=None, password=None),
+        # Sixteen mixed statements (the batch limit), SELECT plans from the fake server.
+        "batch16": local_fixture("; ".join(BATCH_16)),
+        # Analysed, valid-but-unsupported, invalid and unreadable statements in one batch.
+        "not_analysed": local_fixture("SELECT * FROM users WHERE id = 1; VALUES ROW(1); SELEC x; XA START 'x'",
+                                      username=None, password=None),
+        # LIMIT with a sort: MySQL reads and sorts every matching row before LIMIT applies.
+        "limit_filesort": local_fixture(
+            "SELECT * FROM users ORDER BY created_at LIMIT 10",
+            FakeMySQL(explain=[explain_row("ALL", 1_902_192, extra="Using filesort")])),
+        "multi_row_plan": local_fixture(
+            "SELECT * FROM users JOIN orders ON orders.user_id = users.id",
+            FakeMySQL(explain=[explain_row("ALL", 500), explain_row("ref", 3, key="idx_user")])),
+        "mixed_confidence": local_fixture("DROP TABLE audit_log; UPDATE users SET active = 0 WHERE status = 'old';",
+                                          username=None, password=None),
     }
 
 
@@ -162,24 +213,49 @@ HARNESS = """
 <script>
 const FIXTURES = %s;
 const OUT = {};
+const overviewText = () => document.getElementById('overview').textContent;
+const EMPTY_OVERVIEW = overviewText();
 for (const [name, data] of Object.entries(FIXTURES)) {
   renderResults(data);
   const root = document.getElementById('results');
   const cells = root.querySelectorAll('.summary-cell');
   OUT[name] = {
     mode: cells[2].querySelector('strong').textContent,
+    batchConfidence: cells[3].querySelector('strong').textContent,
     summary: root.querySelector('.evidence-summary').textContent,
+    assessment: [...root.querySelectorAll('.assessment .assess-row')].map(row => row.textContent),
+    assessmentBeforeCards: (() => { const a = root.querySelector('.assessment'); const c = root.querySelector('article.statement');
+      return !!a && !!c && !!(a.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING); })(),
+    overview: overviewText(),
+    findingLinks: [...document.querySelectorAll('#overview .ov-finding a')].map(a => a.getAttribute('href')),
+    cardIds: [...root.querySelectorAll('article.statement')].map(card => card.id),
+    indexRows: [...root.querySelectorAll('.stmt-index tbody tr')].map(row => [...row.cells].map(cell => cell.textContent)),
+    indexLinks: [...root.querySelectorAll('.stmt-index a')].map(a => a.getAttribute('href')),
+    composition: {
+      band: document.querySelectorAll('#overview .ov-band > .ov-tile').length,
+      tableRows: document.querySelectorAll('#overview table.ov-table tbody tr').length,
+      oldTilesOrCards: document.querySelectorAll('#overview .ov-kpis, #overview .ov-card, #overview .onboard').length,
+    },
     statements: [...root.querySelectorAll('article.statement')].map(card => ({
       headline: card.querySelector('.evidence-headline').textContent,
       evidence: [...card.querySelectorAll('.layer.evidence p')].map(p => p.textContent),
       metadata: [...card.querySelectorAll('.layer.metadata p')].map(p => p.textContent),
       planGrids: card.querySelectorAll('.layer.evidence .metric-grid').length,
+      scope: (card.querySelector('.row-scope') || {}).textContent || null,
+      warning: (card.querySelector('.analysis-warning') || {}).textContent || null,
       confidence: card.querySelector('.metric.confidence b').textContent,
       why: [...card.querySelector('.layer.final ul.plain-list').children].map(li => li.textContent),
       text: card.textContent,
     })),
   };
 }
+renderResults(FIXTURES.batch16);
+document.querySelectorAll('.stmt-index a')[9].click();
+const BATCH_FOCUS = document.activeElement.id;
+renderLoading();
+const RUNNING_OVERVIEW = overviewText();
+renderError('Validation failed: example');
+OUT.__states = { empty: EMPTY_OVERVIEW, running: RUNNING_OVERVIEW, failed: overviewText(), batchFocus: BATCH_FOCUS };
 const out = document.createElement('pre');
 out.id = 'render-out';
 out.textContent = JSON.stringify(OUT);
@@ -213,7 +289,7 @@ def test_every_rendered_statement_matches_its_evidence_state(rendered):
         assert len(out[name]["statements"]) == data["statement_count"], name
         for statement, view in zip(data["statements"], out[name]["statements"]):
             state = statement["evidence"]
-            assert view["headline"] == HEADLINES[state["overall"]], name
+            assert view["headline"] == expected_headline(state), name
             assert view["confidence"] in {"HIGH", "LIMITED", "LOW"}, name
             assert view["confidence"] == statement["confidence"], name
             assert view["why"] == (statement["reasons"] or ["No additional reasons reported."]), name
@@ -230,7 +306,8 @@ def test_every_rendered_statement_matches_its_evidence_state(rendered):
             if state["plan"]["state"] != "collected":
                 assert not any(line.startswith("Execution-plan evidence was collected") for line in view["evidence"])
             # The plan metric grid exists exactly when a plan was collected.
-            assert view["planGrids"] == (1 if state["plan"]["state"] == "collected" else 0), name
+            assert view["planGrids"] == (1 if state["plan"]["state"] == "collected"
+                                         and state["plan"]["interpreted"] else 0), name
             # A connected database is never presented as unavailable.
             if state["connection"]["state"] == "connected":
                 assert "database unavailable" not in text.lower(), name
@@ -248,8 +325,8 @@ def test_static_only_select(rendered):
 def test_local_select_with_plan(rendered):
     _, out = rendered
     view = out["local_select_plan"]["statements"][0]
-    assert view["evidence"][:4] == [HEADLINES["collected"], "Database metadata was collected.",
-                                    "users: table found", "Execution-plan evidence was collected."]
+    assert view["evidence"][:4] == [COLLECTED_HEADLINES["both"], "Database metadata was collected.",
+                                    "users: table found", PLAN_COLLECTED]
     assert view["confidence"] == "HIGH"
     assert out["local_select_plan"]["mode"] == "Database evidence"
 
@@ -258,7 +335,7 @@ def test_local_select_with_plan(rendered):
 def test_local_dml_shows_metadata_and_the_intentional_plan_skip(rendered, name):
     _, out = rendered
     view = out[name]["statements"][0]
-    assert view["headline"] == HEADLINES["collected"]
+    assert view["headline"] == COLLECTED_HEADLINES["metadata"]
     assert READ_ONLY_PLAN in view["evidence"]
     assert "could not be collected" not in view["text"]
     assert view["confidence"] == "LIMITED"
@@ -282,7 +359,7 @@ def test_metadata_failure_is_named_and_partial(rendered):
     assert view["headline"] == HEADLINES["partial"]
     assert ("Database metadata could not be collected. Your account was denied access to the table metadata."
             in view["evidence"])
-    assert "Execution-plan evidence was collected." in view["evidence"]
+    assert PLAN_COLLECTED in view["evidence"]
     assert "Partial evidence" in out["metadata_failed"]["summary"]
 
 
@@ -350,9 +427,226 @@ def test_missing_table_is_shown_as_not_found(rendered):
 def test_remote_dml_renders_with_the_same_contract(rendered):
     _, out = rendered
     view = out["remote_dml"]["statements"][0]
-    assert view["headline"] == HEADLINES["collected"]
-    assert "Execution-plan evidence was collected." in view["evidence"]
+    # Company connections are read-only too: metadata only, the write plan is not requested.
+    assert view["headline"] == COLLECTED_HEADLINES["metadata"]
+    assert READ_ONLY_PLAN in view["evidence"]
+    assert view["planGrids"] == 0
     assert view["confidence"] == "LIMITED"
+    assert view["scope"].startswith("Row scope: not established.")
+
+
+def test_verified_unique_key_scope_is_shown_as_a_bound_not_a_count(rendered):
+    fixtures, out = rendered
+    statement = fixtures["verified_key"]["statements"][0]
+    assert statement["scope"]["basis"] == "at_most_one_row"
+    view = out["verified_key"]["statements"][0]
+    # Review H3: a direct bound, with indirect effects named as not checked.
+    assert view["scope"] == ("Row scope: at most one row of app.users matches directly, by unique key PRIMARY "
+                             "(confirmed from table metadata). The row may not exist." + INDIRECT)
+    assert view["confidence"] == "HIGH"
+    assert out["verified_key"]["batchConfidence"] == "HIGH"
+
+
+def test_id_column_without_metadata_is_not_presented_as_a_key(rendered):
+    _, out = rendered
+    view = out["static_key"]["statements"][0]
+    assert view["scope"] == ("Row scope: not established. A WHERE clause can match zero, one, some or all rows; "
+                             "the SQL alone does not say how many." + INDIRECT)
+    assert view["confidence"] == "LIMITED"
+    text = view["text"].lower()
+    assert "key-scoped" not in text and "specific key" not in text and "at most one row" not in text
+
+
+def test_write_without_where_has_all_rows_scope_and_high_confidence(rendered):
+    _, out = rendered
+    view = out["no_where"]["statements"][0]
+    assert view["scope"] == ("Row scope: every row of users (from the SQL: no WHERE clause, or one that is "
+                             "always true)." + INDIRECT)
+    assert view["confidence"] == "HIGH"
+
+
+def test_partly_read_sql_is_flagged_and_low_confidence(rendered):
+    fixtures, out = rendered
+    assert fixtures["trailing_select_into"]["statements"][0]["analysis_text_differs"] is True
+    view = out["trailing_select_into"]["statements"][0]
+    assert view["warning"].startswith("The SQL could only be read partly.")
+    assert view["confidence"] == "LOW"
+    assert out["select_into"]["statements"][0]["warning"] is None
+
+
+def test_multi_row_plan_is_shown_without_a_first_row_summary(rendered):
+    fixtures, out = rendered
+    plan = fixtures["multi_row_plan"]["statements"][0]["evidence"]["plan"]
+    assert plan == {"state": "collected", "reason": "multi_row_plan", "rows": 2, "interpreted": False}
+    view = out["multi_row_plan"]["statements"][0]
+    assert view["planGrids"] == 0
+    assert ("Multi-step execution plan (2 rows) collected: shown for reference, not summarised or used for scoring."
+            in view["evidence"])
+
+
+ASSESSMENT_ROWS = ["Top finding", "Execution plan", "Filter and index", "Limitations", "Unknown", "Check first"]
+
+
+def test_primary_assessment_comes_first_and_claims_nothing_unsupported(rendered):
+    fixtures, out = rendered
+    for name, data in fixtures.items():
+        if name == "__states":
+            continue
+        view = out[name]
+        rows = view["assessment"]
+        assert [row[:len(label)] for row, label in zip(rows, ASSESSMENT_ROWS)] == ASSESSMENT_ROWS, name
+        assert view["assessmentBeforeCards"] is True, name
+        joined = " ".join(rows).lower()
+        # Never a safety claim; unknowns only where they apply; no internal metric codes.
+        assert "is safe" not in joined.replace("does not mean the sql is safe", ""), name
+        writes = any(st["statement_type"] in ("UPDATE", "DELETE") for st in data["statements"])
+        assert ("rows changed: not collected" in joined) is writes, name
+        assert "run time, locks: not measured" in joined, name
+        for card in view["statements"]:
+            assert "M1 —" not in card["text"] and "M2 —" not in card["text"], name
+            assert "Table scan and estimated row volume" in card["text"], name
+            assert "Filter and index assessment" in card["text"], name
+    static = " ".join(out["static_select"]["assessment"])
+    assert "Not collected: no database login and database." in static
+    local = " ".join(out["local_select_plan"]["assessment"])
+    assert "Full table scan (access type ALL); optimizer estimate: 500 rows examined." in local
+    assert "No index on users starts with status (table metadata)." in local
+    assert "Full table scan (EXPLAIN access type ALL)" in local  # the top finding
+    missing = " ".join(out["missing_table"]["assessment"])
+    assert "orders was not found in the selected database." in missing
+
+
+def test_plan_line_shows_a_sort_before_limit_and_estimates_stay_estimates(rendered):
+    _, out = rendered
+    plan = " ".join(out["limit_filesort"]["assessment"])
+    assert ("Full table scan (access type ALL); optimizer estimate: 1,902,192 rows examined. "
+            "The plan shows Using filesort: every matching row is read and sorted before LIMIT applies.") in plan
+    # One row is "row"; a one-row estimate is still labelled an estimate.
+    single = " ".join(out["remote_dml"]["assessment"] + out["local_select_plan"]["assessment"])
+    assert " 1 rows " not in single
+
+
+def test_a_metadata_collection_failure_is_listed_as_a_limitation(rendered):
+    _, out = rendered
+    limits = " ".join(out["metadata_failed"]["assessment"])
+    assert "Statement 1: table metadata could not be collected." in limits
+    # and the filter check says why it was not done, never that no index exists
+    assert "Not checked: complete table and index metadata were not available." in limits
+    assert "No index on" not in limits
+
+
+def test_sixteen_statements_each_get_a_row_a_card_and_a_working_link(rendered):
+    fixtures, out = rendered
+    data, view = fixtures["batch16"], out["batch16"]
+    assert data["statement_count"] == 16
+    assert view["cardIds"] == [f"statement-{n}" for n in range(1, 17)]
+    assert view["indexLinks"] == [f"#statement-{n}" for n in range(1, 17)]
+    rows = view["indexRows"]
+    assert len(rows) == 16
+    for n, (row, statement) in enumerate(zip(rows, data["statements"]), 1):
+        number, what, risk, confidence, key = row
+        assert number == f"#{n}"
+        assert what.startswith(statement["statement_type"])  # submitted order kept
+        assert risk.startswith(statement["risk_level"]) and risk.endswith(str(statement["score"]))
+        assert confidence == statement["confidence"]
+    # The unrestricted DELETE (statement 11) is the batch's highest risk and is visible as such.
+    assert data["overall_score"] == data["statements"][10]["score"] == 100
+    assert rows[10][2].startswith("CRITICAL")
+    # Clicking the 10th row opens and focuses statement 10's card.
+    assert out["__states"]["batchFocus"] == "statement-10"
+    # Identical per-statement lines are merged, not repeated sixteen times.
+    plan_row = next(row for row in view["assessment"] if row.startswith("Execution plan"))
+    assert plan_row.count("Not collected: plans are not requested for UPDATE or DELETE.") == 1
+
+
+def test_statements_table_says_why_a_statement_was_not_analysed(rendered):
+    fixtures, out = rendered
+    data, rows = fixtures["not_analysed"], out["not_analysed"]["indexRows"]
+    assert [s["analysis_status"] for s in data["statements"]] == ["analysed", "unsupported", "invalid", "unreadable"]
+    keys = [row[4] for row in rows]
+    assert not keys[0].startswith(("Not valid", "Not analysed", "Could not be read"))
+    assert keys[1] == "Not analysed (not supported): VALUES is a valid MySQL statement that this validator does not analyse"
+    assert keys[2] == 'Not valid MySQL: a MySQL statement cannot begin with "SELEC"'
+    assert keys[3].startswith("Could not be read: ")
+    # Valid-but-unsupported and unreadable SQL is never called invalid; none is shown as low risk.
+    assert "valid MySQL" not in keys[3] and "Not valid" not in keys[1]
+    assert [row[2].split()[0] for row in rows[1:]] == ["CRITICAL"] * 3
+    assert [row[1] for row in rows[1:3]] == ["VALUES", "UNKNOWN"]
+    # Limitations name each statement that was not analysed, and why; never "read partly".
+    limits = next(row for row in out["not_analysed"]["assessment"] if row.startswith("Limitations"))
+    assert "Statement 2: not analysed: valid MySQL, but this statement type is not supported." in limits
+    assert "Statement 3: not analysed: not valid MySQL." in limits
+    for n in (2, 3, 4):
+        assert f"Statement {n}: the SQL could only be read partly." not in limits
+
+
+def test_a_single_statement_has_no_statements_table(rendered):
+    _, out = rendered
+    assert out["local_select_plan"]["indexRows"] == []
+
+
+def test_overview_states_are_derived_only_from_page_state(rendered):
+    _, out = rendered
+    states = out["__states"]
+    assert "No review yet" in states["empty"] and "No result" in states["empty"]
+    assert "In progress" in states["running"] and "Pending" in states["running"]
+    assert "Failed" in states["failed"] and "Validation failed: example" in states["failed"]
+    assert "No result" in states["failed"]
+    for state in states.values():
+        assert "/ 100" not in state and "Priority findings" not in state
+
+
+def test_overview_shows_the_response_and_links_findings_to_statements(rendered):
+    fixtures, out = rendered
+    for name, data in fixtures.items():
+        view = out[name]
+        overview = view["overview"]
+        assert f"{data['overall_risk_level']} · {data['overall_score']} / 100" in overview, name
+        assert f"Confidence{data['overall_confidence']}" in overview, name
+        assert f"Statements{data['statement_count']}" in overview, name
+        assert "not a safety rating" in overview, name
+        assert ("Complete, with limitations" in overview) is (data["overall_confidence"] != "HIGH"), name
+        assert view["cardIds"] == [f"statement-{n}" for n in range(1, data["statement_count"] + 1)], name
+        assert set(view["findingLinks"]) <= set(f"#{card}" for card in view["cardIds"]), name
+        # No safety claim and no plan claim beyond what the response reports.
+        words = overview.lower().replace("not a safety rating", "").replace("does not mean the sql is safe", "")
+        assert " safe" not in words, name
+        if not any(s["evidence"]["plan"]["state"] == "collected" for s in data["statements"]):
+            assert "Execution plan" not in overview or "1 collected" not in overview.split("Execution plan")[1][:12], name
+    assert "Execution planNot collected: no database login and database." in out["static_select"]["overview"]
+    assert "No review yet" not in out["static_select"]["overview"]
+
+
+def test_dashboard_is_one_band_and_a_findings_table_not_tiles_and_cards(rendered):
+    fixtures, out = rendered
+    for name, data in fixtures.items():
+        composition = out[name]["composition"]
+        findings = sum(1 for s in data["statements"]
+                       for f in s["factors"] + s["evidence_factors"] + s["metadata_factors"] if f["points"] > 0)
+        assert composition["band"] == 4, name
+        assert composition["tableRows"] == min(findings, 8), name
+        assert composition["oldTilesOrCards"] == 0, name
+    assert "Severity" in out["mixed_batch"]["overview"] and "DBA actions" in out["mixed_batch"]["overview"]
+    # Metadata not requested (connector, no database selected) is "not collected", not "not applicable".
+    assert "Not collected for 1 statement(s) (no database selected)." in out["remote_no_database"]["overview"]
+
+
+def test_batch_confidence_is_the_weakest_statement(rendered):
+    fixtures, out = rendered
+    data = fixtures["mixed_confidence"]
+    assert [s["confidence"] for s in data["statements"]] == ["HIGH", "LIMITED"]
+    assert data["overall_confidence"] == "LIMITED"
+    assert out["mixed_confidence"]["batchConfidence"] == "LIMITED"
+
+
+def test_no_rendered_result_calls_sql_safe(rendered):
+    _, out = rendered
+    for name, view in out.items():
+        if name == "__states":
+            continue
+        for statement in view["statements"]:
+            words = statement["text"].lower().replace("unsafe", "")
+            assert " safe" not in words and "is safe" not in words, name
 
 
 # ----------------------------------------------------------------------------- browser lifecycle (no Chrome needed)

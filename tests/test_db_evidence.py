@@ -5,6 +5,7 @@ from backend.db import (
     DBConfig,
     validate_readonly_select,
 )
+from backend.db import READ_ONLY_CHECK_SQL, ReadOnlyEvidenceConnection
 from backend.db_evidence import DatabaseEvidence, collect_statement_evidence, parse_explain_rows
 from backend.main import EvidenceRequest, ValidateRequest, health, run_evidence, validate
 import threading
@@ -184,6 +185,13 @@ def test_execute_readonly_closes_one_shot_connection_on_failure(monkeypatch):
 
 def test_get_connection_lease_closes_explain_connection_when_cursor_closes(monkeypatch):
     class Cursor:
+        # Confirms the read-only session that get_connection() requires.
+        def execute(self, sql, args=None):
+            pass
+
+        def fetchone(self):
+            return {"transaction_read_only": 1}
+
         def close(self):
             pass
 
@@ -204,9 +212,41 @@ def test_get_connection_lease_closes_explain_connection_when_cursor_closes(monke
 
     from backend.db import get_connection
     lease = get_connection()
+    assert isinstance(lease, ReadOnlyEvidenceConnection)
+    assert connection.closed is False
     cursor = lease.cursor()
     cursor.close()
 
+    assert connection.closed is True
+
+
+def test_get_connection_fails_closed_when_the_session_is_not_confirmed_read_only(monkeypatch):
+    class Cursor:
+        def execute(self, sql, args=None):
+            pass
+
+        def fetchone(self):
+            return {"transaction_read_only": 0}
+
+        def close(self):
+            pass
+
+    class Connection:
+        closed = False
+
+        def cursor(self):
+            return Cursor()
+
+        def close(self):
+            self.closed = True
+
+    connection = Connection()
+    client = DBClient(DBConfig(host="db", user="user", database="app"))
+    monkeypatch.setattr("backend.db.get_client", lambda: client)
+    monkeypatch.setattr(client, "connect_readonly", lambda: connection)
+
+    from backend.db import get_connection
+    assert get_connection() is None
     assert connection.closed is True
 
 
@@ -373,7 +413,7 @@ def test_explain_evidence_parsing():
     assert evidence["key"] is None
 
 
-def test_update_explain_does_not_execute_update(monkeypatch):
+def test_update_is_never_sent_not_even_as_explain(monkeypatch):
     calls = []
 
     class FakeCursor:
@@ -409,13 +449,14 @@ def test_update_explain_does_not_execute_update(monkeypatch):
                         lambda: FakeConnection())
     evidence = collect_statement_evidence(
         "UPDATE users SET status = 'inactive' WHERE id = 10;")
-    assert evidence is not None
-    assert evidence.available is True
-    assert any("EXPLAIN UPDATE" in sql.upper() for sql in calls)
-    assert not any("UPDATE users SET status" in sql.upper() for sql in calls)
+    # A write plan needs a writable session; evidence sessions are read-only, so
+    # nothing is sent at all: not the UPDATE, not EXPLAIN UPDATE.
+    assert evidence.available is False
+    assert evidence.error == "plan_not_collected_read_only"
+    assert calls == []
 
 
-def test_delete_explain_does_not_execute_delete(monkeypatch):
+def test_delete_is_never_sent_not_even_as_explain(monkeypatch):
     calls = []
 
     class FakeCursor:
@@ -451,17 +492,23 @@ def test_delete_explain_does_not_execute_delete(monkeypatch):
                         lambda: FakeConnection())
     evidence = collect_statement_evidence(
         "DELETE FROM users WHERE status = 'inactive';")
-    assert evidence is not None
-    assert evidence.available is True
-    assert any("EXPLAIN DELETE" in sql.upper() for sql in calls)
+    assert evidence.available is False
+    assert evidence.error == "plan_not_collected_read_only"
+    assert calls == []
 
 
 def test_select_explain_evidence(monkeypatch):
     class FakeCursor:
+        last = ""
+
         def execute(self, sql):
-            assert sql.lower().startswith("explain select")
+            # Only the read-only read-back and the plan request are ever sent.
+            assert sql == READ_ONLY_CHECK_SQL or sql.lower().startswith("explain select")
+            self.last = sql
 
         def fetchall(self):
+            if self.last == READ_ONLY_CHECK_SQL:
+                return [{"transaction_read_only": 1}]
             return [{
                 "id": 1,
                 "table": "orders",
@@ -484,11 +531,12 @@ def test_select_explain_evidence(monkeypatch):
             return FakeCursor()
 
     monkeypatch.setattr("backend.db_evidence.get_connection",
-                        lambda: FakeConnection())
+                        lambda: ReadOnlyEvidenceConnection(FakeConnection()))
     evidence = collect_statement_evidence(
         "SELECT * FROM orders WHERE customer_id = 42;")
     assert evidence is not None
     assert evidence.available is True
+    assert evidence.plan_row_count == 1
     assert evidence.database is None
     assert evidence.estimated_rows == 3
     assert evidence.access_type == "ref"
@@ -557,8 +605,8 @@ def test_explain_driver_errors_are_sanitized():
             return FailingCursor()
 
     result = collect_statement_evidence(
-        "UPDATE users SET status = 'inactive' WHERE id = 10;",
-        connection=FailingConnection(),
+        "SELECT status FROM users WHERE id = 10;",
+        connection=ReadOnlyEvidenceConnection(FailingConnection()),
     )
 
     assert result.error == "explain_failed"

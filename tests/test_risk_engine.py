@@ -15,11 +15,15 @@ def test_normal_update_is_not_penalized_for_missing_limit():
     assert any("row impact" in finding.lower() for finding in r.findings)
 
 
-def test_key_scoped_update_gets_small_reduction():
+def test_id_equality_without_metadata_gets_no_key_credit():
+    """A column named id is not proof of a key: no reduction, MEDIUM floor (W2)."""
     r = report("UPDATE users SET status = 'inactive' WHERE id = 10;")
-    assert r.score == 10
-    assert r.risk_level == "LOW"
-    assert any("key-scoped" in f.label for f in r.factors)
+    assert r.score == 20
+    assert r.risk_level == "MEDIUM"
+    assert r.confidence == "LIMITED"
+    assert all(f.points >= 0 for f in r.factors)
+    text = " ".join([*r.findings, *(f.label for f in r.factors)]).lower()
+    assert "key-scoped" not in text and "specific key" not in text and "single row" not in text
 
 
 def test_update_without_where_is_high_or_worse():

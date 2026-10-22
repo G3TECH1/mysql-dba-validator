@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 
 import backend.db as backend_db
 import backend.main as backend_main
-from backend.db import EVIDENCE_STATUSES, READ_ONLY_SESSION_SQL, ReadOnlyEvidenceConnection
+from backend.db import EVIDENCE_STATUSES, READ_ONLY_CHECK_SQL, READ_ONLY_SESSION_SQL, ReadOnlyEvidenceConnection
 from backend.main import app
 
 USER = "fake_local_user"
@@ -57,9 +57,12 @@ class FakeMySQL:
     """Records connections and statements; answers the fixed evidence queries."""
 
     def __init__(self, *, connect_error=None, set_error=None, explain=None, explain_error=None,
-                 table_rows=100, metadata_error=None):
+                 table_rows=100, metadata_error=None, confirms_read_only=True):
         self.connect_error = connect_error
         self.set_error = set_error
+        # False models a server that accepts SET SESSION TRANSACTION READ ONLY but
+        # does not report the session as read-only afterwards.
+        self.confirms_read_only = confirms_read_only
         self.explain = explain if explain is not None else [explain_row("ALL", 500, extra="Using where")]
         self.explain_error = explain_error
         self.table_rows = table_rows
@@ -84,6 +87,8 @@ class FakeMySQL:
                 raise self.set_error
             connection.read_only = True
             return []
+        if text == READ_ONLY_CHECK_SQL:
+            return [{"transaction_read_only": 1 if connection.read_only and self.confirms_read_only else 0}]
         if text.startswith("EXPLAIN"):
             if connection.read_only and READ_ONLY_REFUSED.match(text):
                 # Real MySQL: EXPLAIN of a write is refused in a read-only session.
@@ -176,7 +181,7 @@ def assert_no_secrets(text):
         assert secret not in text, secret
 
 
-ALLOWED_PREFIXES = (READ_ONLY_SESSION_SQL, "EXPLAIN ", "SELECT DATABASE()", "SELECT ENGINE",
+ALLOWED_PREFIXES = (READ_ONLY_SESSION_SQL, READ_ONLY_CHECK_SQL, "EXPLAIN ", "SELECT DATABASE()", "SELECT ENGINE",
                     "SELECT INDEX_NAME", "SELECT COLUMN_NAME")
 
 
@@ -509,7 +514,6 @@ def test_anything_but_a_verified_plain_select_gets_no_plan_request(mysql, sql):
 @pytest.mark.parametrize("sql", [
     "SELECT * FROM users /*!50000 , (SELECT 2) */",
     "SELECT * FROM users -- */ /*!50000 UNION SELECT 2 */",
-    "SELECT /*+ SET_VAR(transaction_read_only = OFF) */ * FROM users",
     "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)",
     "WITH a AS (SELECT 1 AS id) SELECT * FROM users WHERE id IN (SELECT id FROM a)",
 ])
@@ -518,6 +522,33 @@ def test_planned_selects_are_plain_and_carry_no_executable_comment(mysql, sql):
     assert len(explains(mysql)) == 1
     assert_read_only_boundary(mysql)
     assert not any("/*!" in executed for executed in mysql.executed)
+
+
+@pytest.mark.parametrize("sql", [
+    # An optimizer hint naming the read-only setting: never sent, whatever MySQL would do with it.
+    "SELECT /*+ SET_VAR(transaction_read_only = OFF) */ * FROM users",
+    # EXPLAIN can evaluate functions; a stored function can change data.
+    "SELECT * FROM users, (SELECT cleanup()) AS t",
+    "SELECT SLEEP(5) FROM users",
+    "SELECT * FROM users WHERE id = 1 FOR UPDATE",
+])
+def test_selects_with_functions_hints_or_locks_are_not_planned(mysql, sql):
+    statement = post(sql).json()["statements"][0]
+    assert explains(mysql) == []
+    assert statement["evidence"]["plan"]["state"] == "not_eligible"
+    assert_read_only_boundary(mysql)
+
+
+def test_server_that_does_not_confirm_read_only_gets_no_evidence_query():
+    """SET SESSION TRANSACTION READ ONLY is read back; without confirmation nothing else is sent."""
+    from unittest.mock import patch
+
+    server = FakeMySQL(confirms_read_only=False)
+    with patch("pymysql.connect", server.connect):
+        statement = post("SELECT * FROM users WHERE id = 1").json()["statements"][0]
+    assert server.executed == [READ_ONLY_SESSION_SQL, READ_ONLY_CHECK_SQL]
+    assert server.connections[0].close_calls == 1
+    assert statement["evidence"]["connection"] == {"state": "failed", "reason": "collection_failed"}
 
 
 def test_the_gate_checks_the_outgoing_sql_not_the_classification(mysql, monkeypatch):
@@ -543,14 +574,17 @@ def test_error_1792_maps_to_read_only_status_without_retry_or_new_connection(mys
     assert "READ ONLY transaction" not in response.text
 
 
-def test_error_1792_on_a_non_local_connection_keeps_its_previous_mapping():
-    """The connector passes a raw connection; its EXPLAIN error mapping is unchanged."""
+def test_a_connection_not_confirmed_read_only_never_receives_a_plan_request():
+    """Only a confirmed read-only session is planned on; a write is never planned at all."""
     from backend.db_evidence import collect_statement_evidence
 
-    server = FakeMySQL(explain_error=mysql_error(1792, "read only"))
-    evidence = collect_statement_evidence("DELETE FROM users WHERE id = 1", connection=FakeConnection(server))
-    assert evidence.error == "explain_failed"
-    assert explains(server) == ["EXPLAIN DELETE FROM users WHERE id = 1;"]
+    server = FakeMySQL()
+    raw = FakeConnection(server)
+    write = collect_statement_evidence("DELETE FROM users WHERE id = 1", connection=raw)
+    select = collect_statement_evidence("SELECT * FROM users WHERE id = 1", connection=raw)
+    assert write.error == "plan_not_collected_read_only"
+    assert select.error == "collection_failed"
+    assert server.executed == []
 
 
 def test_dml_only_batch_uses_one_read_only_connection_and_one_close(mysql):
@@ -594,7 +628,9 @@ def test_no_safety_off_switch_exists():
 
     from backend.db_evidence import collect_statement_evidence
 
-    assert list(inspect.signature(collect_statement_evidence).parameters) == ["sql", "connection", "session"]
+    # source_facts only adds checks (the submitted statement's eligibility); no flag relaxes one.
+    assert list(inspect.signature(collect_statement_evidence).parameters) == [
+        "sql", "connection", "session", "source_facts"]
     assert list(inspect.signature(backend_db.open_evidence_connection).parameters) == [
         "profile", "database", "read_timeout"]
     assert set(vars(ReadOnlyEvidenceConnection)) - {"__module__", "__qualname__", "__doc__", "__dict__",

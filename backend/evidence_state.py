@@ -10,10 +10,14 @@ same meaning; only how evidence is collected differs.
     connection  not_attempted | connected | failed
     plan        collected | not_collected_read_only | not_eligible | not_supported
                 | failed | not_attempted
+                (collected also carries rows, the number of EXPLAIN rows, and
+                interpreted: whether the plan fields were used, true only for one row;
+                a multi-row plan has reason multi_row_plan)
     metadata    collected | failed | not_applicable | not_attempted
     overall     static_only | collected | partial | unavailable | not_applicable
 
-"collected" means the database returned that evidence; it never means it is complete.
+"collected" means the database returned that evidence; it never means it is complete,
+and evidence that a table exists says nothing about how many rows a statement matches.
 Execution-plan rows and table rows are optimizer/engine estimates, and no evidence the
 validator collects gives the number of rows a statement would affect. Evidence never
 changes confidence (HIGH, LIMITED, LOW); scoring adjustments live in evidence_scoring,
@@ -38,6 +42,7 @@ from .recommendations import recommendations_from_gaps
 from .risk_engine import OFFLINE_EVIDENCE_REASON, OFFLINE_ROW_IMPACT_REASON
 
 NO_DATABASE_SELECTED = "no_database_selected"
+MULTI_ROW_PLAN = "multi_row_plan"
 UNKNOWN_GAP_REASON = "Evidence for this assessment dimension was not established."
 
 
@@ -61,7 +66,10 @@ def _plan(connection: EvidenceConnection, evidence: DatabaseEvidence) -> dict[st
     if connection.state != "connected":
         return {"state": "not_attempted", "reason": None}
     if evidence.available and evidence.explain_available:
-        return {"state": "collected", "reason": None}
+        rows = getattr(evidence, "plan_row_count", None)
+        interpreted = rows == 1
+        return {"state": "collected", "reason": None if interpreted else MULTI_ROW_PLAN,
+                "rows": rows, "interpreted": interpreted}
     status = evidence_status(evidence)
     if status == PLAN_NOT_COLLECTED_READ_ONLY:
         return {"state": "not_collected_read_only", "reason": status}
@@ -182,6 +190,8 @@ _REASON_TEXT = {
     "budget_exceeded": "metadata collection exceeded its size limit",
     "invalid_reference": "a table reference was not supported",
     "unavailable": "metadata was unavailable",
+    "plan_not_collected_read_only": "execution plans for writes are not collected on the read-only evidence connection",
+    "explain_format_unsupported": "MySQL returned the plan in a format the validator does not read",
     NO_DATABASE_SELECTED: "no database was selected",
 }
 
@@ -193,9 +203,11 @@ def _reason_text(code: Optional[str]) -> str:
 def _plan_phrase(plan: dict[str, Any]) -> str:
     state = plan["state"]
     if state == "collected":
+        if not plan.get("interpreted", True):
+            return "a multi-step execution plan was collected (shown, not used for scoring)"
         return "an execution plan was collected (optimizer estimates)"
     if state == "not_collected_read_only":
-        return "the execution plan was not collected because the local evidence connection is read-only"
+        return "the execution plan was not collected because the evidence connection is read-only"
     if state == "not_eligible":
         return "no execution plan was requested because this statement is not eligible for planning"
     if state == "not_supported":

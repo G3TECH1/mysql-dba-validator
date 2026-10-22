@@ -7,7 +7,7 @@ import re
 import time
 from typing import Any, Optional
 
-from .db import AnalysisSession, get_client, get_connection
+from .db import AnalysisSession, enforce_read_only_session, get_client, get_connection
 
 
 TABLES_SQL = """SELECT ENGINE, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, CREATE_OPTIONS, UPDATE_TIME
@@ -127,6 +127,22 @@ def _table_found(query_states: list[MetadataQueryState], schema: str, table: str
     return None
 
 
+def _confirmed_read_only(connection: Any) -> Any:
+    """The connection as a confirmed read-only session, or None after closing it."""
+    if connection is None:
+        return None
+    try:
+        confirmed = enforce_read_only_session(connection)
+    except Exception:
+        confirmed = None
+    if confirmed is None:
+        try:
+            connection.close()
+        except Exception:
+            pass
+    return confirmed
+
+
 def collect_metadata(
     table_references: list[str],
     connection: Any = None,
@@ -199,6 +215,9 @@ def collect_metadata(
                             config.query_timeout_seconds,
                             session=session,
                         )
+                    # Like every evidence connection, the session must be confirmed
+                    # read-only before any query; otherwise it is closed (fail closed).
+                    conn = _confirmed_read_only(conn)
                     if conn is None:
                         result = MetadataEvidence(status="unavailable", warnings=[
                                                   _warning("unavailable")])

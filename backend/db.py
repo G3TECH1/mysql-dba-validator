@@ -180,6 +180,7 @@ EVIDENCE_STATUSES = (
     "collection_failed",
     "plan_not_collected_read_only",
     "plan_not_eligible",
+    "explain_format_unsupported",
 )
 
 _MYSQL_ERRNO_STATUS = {
@@ -203,12 +204,15 @@ READ_ONLY_TRANSACTION_ERRNO = 1792
 
 
 class ReadOnlyEvidenceConnection:
-    """The local evidence connection after its session was set to read-only transactions.
+    """An evidence connection whose session MySQL confirmed as read-only.
 
-    Only open_evidence_connection() creates it. The evidence collector recognises this
-    type and sends a plan request on it only for one verified plain SELECT; UPDATE,
-    DELETE and every other statement get no plan request. It exposes only what the
-    evidence and metadata collectors use, and it cannot be made writable.
+    Created only after enforce_read_only_session() confirmed the session, for local and
+    company connections. The evidence collector recognises this type and sends a plan
+    request on it only for one verified plain SELECT, after reading the read-only state
+    back again on the same cursor; UPDATE, DELETE and every other statement get no plan
+    request. It exposes only what the evidence and metadata collectors use. Nothing in
+    the validator switches it to read/write; whether SQL evaluated by MySQL could (a
+    stored function, for example) is a live-server check (VERIFICATION.md).
     """
 
     def __init__(self, connection: Any):
@@ -219,6 +223,51 @@ class ReadOnlyEvidenceConnection:
 
     def close(self):
         return self._connection.close()
+
+
+# Read back after READ_ONLY_SESSION_SQL: the label alone does not prove the session is
+# read-only. MySQL 8.0+ documents @@SESSION.transaction_read_only as the session value
+# that SET SESSION TRANSACTION sets.
+READ_ONLY_CHECK_SQL = "SELECT @@SESSION.transaction_read_only AS transaction_read_only"
+
+
+def _read_only_value(row: Any) -> Any:
+    if isinstance(row, Mapping):
+        return row.get("transaction_read_only")
+    if isinstance(row, (tuple, list)) and row:
+        return row[0]
+    return None
+
+
+def read_only_value_confirmed(row: Any) -> bool:
+    """True when a READ_ONLY_CHECK_SQL result row reports a read-only session."""
+    return _read_only_value(row) in (1, True, "1")
+
+
+def enforce_read_only_session(connection: Any) -> Optional[ReadOnlyEvidenceConnection]:
+    """Set the session to read-only transactions and confirm MySQL reports it.
+
+    Returns the wrapped connection, or None when the server does not confirm a
+    read-only session (the caller closes the connection and collects no evidence).
+    Used for every evidence connection, local and company: in a read-only transaction
+    "changes to tables are prohibited", which also stops a stored function that EXPLAIN
+    might evaluate from changing data. Driver errors propagate to the caller.
+    """
+    if isinstance(connection, ReadOnlyEvidenceConnection):
+        return connection
+    cursor = connection.cursor()
+    try:
+        cursor.execute(READ_ONLY_SESSION_SQL)
+        cursor.execute(READ_ONLY_CHECK_SQL)
+        row = cursor.fetchone()
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+    if not read_only_value_confirmed(row):
+        return None
+    return ReadOnlyEvidenceConnection(connection)
 
 
 def mysql_errno(exc: BaseException) -> Optional[int]:
@@ -241,9 +290,11 @@ def open_evidence_connection(
 
     Uses the credentials supplied with that request and binds the selected database
     at connect time. Before any evidence query the session is set to read-only
-    transactions (defense in depth; MySQL account privileges remain the authorization
-    boundary). If that cannot be set, the connection is closed and no evidence is
-    collected (fail closed).
+    transactions and MySQL must confirm it (enforce_read_only_session). This is a
+    transaction setting, not an authorization boundary: MySQL account privileges
+    remain the authorization boundary, and temporary tables stay writable in a
+    read-only transaction. If it is not confirmed, the connection is closed and no
+    evidence is collected (fail closed).
 
     Returns (ReadOnlyEvidenceConnection, None) on success or (None, status) with a safe
     status code. The caller owns the connection and must close it exactly once.
@@ -269,22 +320,17 @@ def open_evidence_connection(
         return None, mysql_error_status(exc, "unreachable")
 
     try:
-        cursor = connection.cursor()
-        try:
-            cursor.execute(READ_ONLY_SESSION_SQL)
-        finally:
-            try:
-                cursor.close()
-            except Exception:
-                pass
+        read_only = enforce_read_only_session(connection)
     except Exception:
+        read_only = None
+    if read_only is None:
         try:
             connection.close()
         except Exception:
             pass
         return None, "collection_failed"
 
-    return ReadOnlyEvidenceConnection(connection), None
+    return read_only, None
 
 
 def discover_databases(
@@ -539,14 +585,34 @@ class _ConnectionLease:
         return self._connection.close()
 
 
-def get_connection(session: Optional[AnalysisSession] = None):
-    """Return a live MySQL connection when the environment is configured.
+class _ReadOnlyConnectionLease(ReadOnlyEvidenceConnection):
+    """A confirmed read-only connection whose first cursor close also closes it."""
 
-    This is intentionally safe and read-only in practice: the evidence layer
-    only issues EXPLAIN queries and never executes user-submitted DML.
+    def cursor(self, *args, **kwargs):
+        return _CursorLease(self._connection.cursor(*args, **kwargs), self._connection)
+
+
+def get_connection(session: Optional[AnalysisSession] = None):
+    """Return a live, confirmed read-only MySQL connection when one is configured.
+
+    Like every evidence connection, the session is set to read-only transactions and
+    MySQL must confirm it (enforce_read_only_session) before it is returned; otherwise
+    the connection is closed and None is returned (fail closed).
     """
     if session is None:
         connection = get_client().connect_readonly()
     else:
         connection = get_client().connect_readonly(session=session)
-    return _ConnectionLease(connection) if connection is not None else None
+    if connection is None:
+        return None
+    try:
+        confirmed = enforce_read_only_session(connection)
+    except Exception:
+        confirmed = None
+    if confirmed is None:
+        try:
+            connection.close()
+        except Exception:
+            pass
+        return None
+    return _ReadOnlyConnectionLease(connection)

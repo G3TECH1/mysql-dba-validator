@@ -300,7 +300,10 @@ def test_discovery_state_is_cleared_on_target_login_and_session_changes(served_h
 @pytest.mark.parametrize("sql, code", [
     (";".join(["SELECT 1"] * 17), "statement_limit_exceeded"),
     ("SELECT 1 -- " + "x" * (65 * 1024), "request_too_large"),
-], ids=["statement_limit", "oversized_sql"])
+    ("-- only a comment", "no_statements"),
+    ("DELIMITER //", "delimiter_not_supported"),
+    ("CREATE PROCEDURE p() BEGIN DELETE FROM t; END", "stored_program_not_supported"),
+], ids=["statement_limit", "oversized_sql", "no_statements", "delimiter", "stored_program"])
 def test_local_limit_errors_returned_by_api_have_friendly_page_messages(served_html, sql, code):
     response = TestClient(app).post("/api/validate", json={"sql": sql})
     assert response.status_code == 200 and response.json().get("error") == code
@@ -315,6 +318,22 @@ def test_local_limit_errors_returned_by_api_have_friendly_page_messages(served_h
 def test_connector_statement_limit_has_friendly_message(served_html):
     connector_map = served_html[served_html.index("const CONNECTOR_ERROR_MESSAGES = {"):]
     assert "statement_limit_exceeded: '" in connector_map[:connector_map.index("};")]
+
+
+def test_batch_contract_errors_have_the_same_message_locally_and_remotely(served_html):
+    def message(map_name, code):
+        mapping = served_html[served_html.index(f"const {map_name} = {{"):]
+        line = next(line for line in mapping[:mapping.index("};")].splitlines()
+                    if line.strip().startswith(code + ": '"))
+        return line.strip()[len(code) + 3:].rstrip("',")
+
+    for code in ("no_statements", "delimiter_not_supported", "stored_program_not_supported"):
+        local = message("RESPONSE_ERROR_MESSAGES", code)
+        assert local == message("CONNECTOR_ERROR_MESSAGES", code)
+        # Nothing was assessed: no risk level is implied.
+        assert "LOW" not in local and "risk" not in local.lower()
+    assert "Nothing was assessed." in message("RESPONSE_ERROR_MESSAGES", "no_statements")
+    assert "not analysed" in message("RESPONSE_ERROR_MESSAGES", "stored_program_not_supported")
 
 
 def test_leaving_connector_mode_clears_company_login(served_html):

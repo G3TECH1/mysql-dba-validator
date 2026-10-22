@@ -1,4 +1,22 @@
-"""Bounded, deterministic risk adjustments from Phase 1 database evidence."""
+"""Bounded, deterministic risk adjustments from Phase 1 database evidence.
+
+Plan facts only ever raise a score. No access type lowers it: MySQL uses `ref`
+exactly when a key "cannot select a single row", and a narrow row scope is
+established only by a unique key confirmed in table metadata (backend.row_scope).
+Plan fields describe EXPLAIN's first row, so they are used only for a one-row plan.
+
+The score is operational severity if the statement runs (contract 8.1), so a
+SELECT's plan is scored too: a full table scan or a large optimizer estimate is
+load on the server even though nothing is written. With LIMIT, MySQL stops once
+it has sent the requested rows unless it must first sort or group every matching
+row ("If a filesort must be done, all rows that match the query without the LIMIT
+clause are selected", MySQL 8.0 LIMIT Query Optimization). So a SELECT with LIMIT
+whose plan shows Using filesort or Using temporary is scored as without LIMIT; any
+other SELECT with LIMIT keeps the full-scan finding (how many rows are read is not
+known) but not the row-volume one. Every evidence connection is read-only, so
+UPDATE/DELETE plans are not collected in practice; the write rules stay correct
+for any plan supplied to them.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +27,14 @@ from .risk_engine import ScoreFactor, StatementReport, _risk_level
 
 
 SUPPORTED_STATEMENTS = {"SELECT", "UPDATE", "DELETE"}
-SELECTIVE_ACCESS_TYPES = {"const", "eq_ref", "ref"}
 HIGH_ESTIMATED_ROWS = 10_000
 FULL_SCAN_POINTS = 10
 HIGH_ROWS_POINTS = 10
-INDEXED_ACCESS_POINTS = -3
+
+
+def plan_is_interpretable(evidence: DatabaseEvidence) -> bool:
+    """True when the plan has exactly one row, so its fields describe the whole plan."""
+    return getattr(evidence, "plan_row_count", None) == 1
 
 
 @dataclass
@@ -38,9 +59,17 @@ def apply_evidence_adjustments(
     """
     static_score = report.score
     is_write = report.facts.statement_type in {"UPDATE", "DELETE"}
+    is_select = report.facts.statement_type == "SELECT"
+    scored = is_write or is_select
+    extra = evidence.extra if isinstance(evidence.extra, str) else ""
+    # A SELECT with LIMIT may stop early, unless every matching row is sorted or grouped
+    # first; only then does the optimizer's estimate describe what is read.
+    may_stop_early = (is_select and bool(getattr(report.facts, "has_limit", False))
+                      and "Using filesort" not in extra and "Using temporary" not in extra)
     if (
         not evidence.available
         or not evidence.explain_available
+        or not plan_is_interpretable(evidence)
         or report.facts.statement_type not in SUPPORTED_STATEMENTS
         or report.risk_level == "CRITICAL"
     ):
@@ -64,40 +93,43 @@ def apply_evidence_adjustments(
     score_adjustment = 0
 
     full_scan = evidence.full_table_scan is True
-    if is_write and full_scan:
+    if scored and full_scan:
         factors.append(ScoreFactor("EXPLAIN indicates a full table scan", FULL_SCAN_POINTS))
         findings.append(
+            "EXPLAIN shows a full table scan (access type ALL); with LIMIT, MySQL may stop early, "
+            "so how many rows are read is not known."
+            if may_stop_early else
+            "EXPLAIN shows a full table scan (access type ALL): the read examines the whole table."
+            if is_select else
             "EXPLAIN indicates a full table scan; this may examine a broad portion of the table."
         )
         checklist.append("Review the EXPLAIN plan and confirm the access path is intended.")
         score_adjustment += FULL_SCAN_POINTS
 
     has_high_estimate = (
-        is_write
+        scored
+        and not may_stop_early
         and
         isinstance(evidence.estimated_rows, int)
+        and not isinstance(evidence.estimated_rows, bool)
         and evidence.estimated_rows >= HIGH_ESTIMATED_ROWS
     )
     if has_high_estimate:
         factors.append(ScoreFactor("EXPLAIN estimated rows are high", HIGH_ROWS_POINTS))
-        findings.append(
-            "The optimizer estimates that EXPLAIN will examine a broad number of rows; "
-            "this is not an exact affected-row count."
-        )
-        checklist.append("Review the EXPLAIN estimate and verify the expected business impact.")
+        if is_select:
+            findings.append(
+                f"The optimizer estimates {evidence.estimated_rows:,} rows examined (at least "
+                f"{HIGH_ESTIMATED_ROWS:,}); this is an estimate, not a measured count."
+            )
+            checklist.append("Confirm the read is intended at this volume; a selective, indexed filter "
+                             "narrows it. Consider the load before running it on a busy server.")
+        else:
+            findings.append(
+                "The optimizer estimates that EXPLAIN will examine a broad number of rows; "
+                "this is not an exact affected-row count."
+            )
+            checklist.append("Review the EXPLAIN estimate and verify the expected business impact.")
         score_adjustment += HIGH_ROWS_POINTS
-
-    indexed_access = (
-        evidence.access_type in SELECTIVE_ACCESS_TYPES
-        and bool(evidence.key)
-        and not full_scan
-    )
-    if indexed_access and is_write:
-        factors.append(ScoreFactor("EXPLAIN confirms selective indexed access", INDEXED_ACCESS_POINTS))
-        findings.append(
-            "EXPLAIN confirms selective indexed access; verify that the selected key is appropriate."
-        )
-        score_adjustment += INDEXED_ACCESS_POINTS
 
     # Confidence (HIGH/LIMITED/LOW) is never changed here: an EXPLAIN plan gives
     # optimizer estimates, not affected-row counts. What evidence a result has is

@@ -18,8 +18,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .parser import StatementFacts
+from .parser import NOT_ANALYSED_WORDING, UNREADABLE, StatementFacts, parse_sql
 from . import models
+from .row_scope import ALL_ROWS, static_row_scope
 from typing import Union
 
 
@@ -56,6 +57,48 @@ OFFLINE_EVIDENCE_REASON = (
 OFFLINE_ROW_IMPACT_REASON = (
     "Row impact cannot be determined in offline analysis; "
     "actual database row counts are not available."
+)
+NULL_TEST_REASON = (
+    "The WHERE clause tests IS NULL or IS NOT NULL; such predicates can match many rows."
+)
+LOSSY_PARSE_REASON = (
+    "The SQL could only be read partly; the analysed statement may differ from the submitted text."
+)
+
+# Manual preflight guidance. It is advice for the DBA, never a query the validator
+# builds or runs, and it never claims that a count or a transaction makes a write safe.
+CANDIDATE_ROWS_CHECK = (
+    "Review the candidate rows with a read-only query written for this statement's actual "
+    "target table and predicate; a count is a point-in-time check, not a guarantee of what the write will change."
+)
+CONCURRENCY_CHECK = (
+    "Consider transaction boundaries, isolation level and concurrent changes between your check and the write."
+)
+
+STATEMENTS_WITH_ROW_IMPACT = {"UPDATE", "DELETE", "INSERT", "REPLACE", "CALL"}
+
+# A WHERE clause that is true for every row by its structure (WHERE 1, WHERE TRUE,
+# WHERE id = 5 OR 1): the write matches every row, exactly as with no WHERE.
+ALWAYS_TRUE_WHERE_REASON = (
+    "The WHERE clause ({predicate}) is always true; the operation matches every row, "
+    "exactly as if it had no WHERE clause."
+)
+
+# EXPLAIN / DESCRIBE. The validator never sends these statements to MySQL; the reasons
+# describe what MySQL would do if someone ran the submitted text.
+EXPLAIN_ANALYZE_REASON = (
+    "EXPLAIN ANALYZE runs the statement it explains in order to time it, so this is scored "
+    "as that {statement_type}. Where MySQL accepts EXPLAIN ANALYZE for it, running this text "
+    "executes the {statement_type}."
+)
+EXPLAIN_ANALYZE_UNREADABLE_REASON = (
+    "EXPLAIN ANALYZE runs the statement it explains, and that statement could not be read; "
+    "its effect is unknown."
+)
+EXPLAIN_OF_CHANGE_REASON = (
+    "EXPLAIN without ANALYZE plans the {statement_type} without running it, but the text "
+    "contains a {statement_type}: if it is run without the EXPLAIN prefix it changes data. "
+    "Review it as that statement."
 )
 
 
@@ -111,23 +154,36 @@ def _risk_level(score: int) -> str:
 # CONFIDENCE
 # ------------------------------------------------------------------
 
-def _confidence_for_offline_analysis(
+CONFIDENCE_ORDER = {"LOW": 0, "LIMITED": 1, "HIGH": 2}
+
+
+def weakest_confidence(levels: list[str]) -> str:
+    """The lowest of the given confidence levels (the batch rule)."""
+    return min(levels, key=lambda level: CONFIDENCE_ORDER.get(level, 0)) if levels else "LOW"
+
+
+def static_confidence(
     facts: StatementFacts,
 ) -> str:
     """
-    Confidence means confidence in the STATIC classification,
-    not confidence that the SQL is safe.
+    Confidence in the assessment from the SQL alone; never confidence that it is safe.
 
-    DROP/TRUNCATE are deterministic from the SQL itself, so their
-    classification can be HIGH confidence even without connecting
-    to MySQL.
+    HIGH: the facts that decide this statement's risk are established by the SQL:
+    DDL, DCL, transaction control, SELECT, and an UPDATE/DELETE whose row scope is
+    all rows of one table. LIMITED: a fact that could change the assessment is not
+    established, usually the row scope of a write. LOW: the SQL could not be read, or
+    only partly (the analysed text may not be the submitted text).
 
-    DML gets LIMITED confidence because actual affected-row counts
-    require database evidence.
+    This is the only confidence rule; backend.main caps it with evidence
+    (backend.main.final_confidence) and never raises it except through a verified
+    row scope.
     """
 
-    if facts.parse_error:
+    if facts.parse_error or facts.lossy_parse:
         return "LOW"
+
+    if facts.statement_type in {"UPDATE", "DELETE"}:
+        return "HIGH" if static_row_scope(facts) == ALL_ROWS else "LIMITED"
 
     if facts.statement_type in {
         "DROP",
@@ -201,6 +257,10 @@ def score_statement(
     # --------------------------------------------------------------
 
     if facts.parse_error:
+        # Not analysed (invalid, unsupported or unreadable): never reassuring, so the
+        # score stays at its maximum with LOW confidence; the wording says which case.
+        title, first_check = NOT_ANALYSED_WORDING.get(
+            facts.analysis_status, NOT_ANALYSED_WORDING[UNREADABLE])
 
         return StatementReport(
             facts=facts,
@@ -209,15 +269,15 @@ def score_statement(
             confidence="LOW",
             factors=[
                 ScoreFactor(
-                    "Parse error — statement could not be safely analyzed",
+                    "Statement not analysed — risk not assessed",
                     100,
                 )
             ],
             findings=[
-                f"Parser error: {facts.parse_error}"
+                f"{title}: {facts.parse_error}"
             ],
             checklist=[
-                "Fix the SQL syntax before proceeding.",
+                first_check,
                 "Do not execute a statement that the validator could not analyze.",
             ],
         )
@@ -227,6 +287,14 @@ def score_statement(
     checklist: list[str] = []
 
     statement_type = facts.statement_type
+
+    # --------------------------------------------------------------
+    # EXPLAIN ANALYZE: MySQL runs the explained statement
+    # --------------------------------------------------------------
+
+    if statement_type == "DESCRIBE" and facts.explain_analyze:
+
+        return _score_explain_analyze(facts, batch_size)
 
     # --------------------------------------------------------------
     # BASE SCORE
@@ -294,19 +362,33 @@ def score_statement(
         # NO WHERE
         # ----------------------------------------------------------
 
-        if facts.has_where is False:
+        if facts.has_where is False or facts.where_always_true:
 
-            factors.append(
-                ScoreFactor(
-                    "No WHERE clause — potentially affects every row",
-                    65,
+            if facts.has_where is False:
+
+                factors.append(
+                    ScoreFactor(
+                        "No WHERE clause — potentially affects every row",
+                        65,
+                    )
                 )
-            )
 
-            reasons.append(
-                f"{statement_type} has no WHERE clause; "
-                "the operation may affect every row."
-            )
+                reasons.append(
+                    f"{statement_type} has no WHERE clause; "
+                    "the operation may affect every row."
+                )
+
+            else:
+
+                factors.append(
+                    ScoreFactor(
+                        "WHERE clause is always true — matches every row",
+                        65,
+                    )
+                )
+
+                reasons.append(ALWAYS_TRUE_WHERE_REASON.format(
+                    predicate=facts.where_predicate_summary))
 
             checklist.extend(
                 [
@@ -341,7 +423,7 @@ def score_statement(
             checklist.extend(
                 [
                     "Verify that the WHERE predicate actually narrows the target rows.",
-                    "Run a SELECT COUNT(*) using the same predicate.",
+                    CANDIDATE_ROWS_CHECK,
                     "Review the execution plan before execution.",
                 ]
             )
@@ -349,70 +431,43 @@ def score_statement(
             score += 25
 
         # ----------------------------------------------------------
-        # NORMAL WHERE
+        # ANY OTHER WHERE
         # ----------------------------------------------------------
+        #
+        # A WHERE clause is a structural fact, not evidence of a narrow
+        # write: it can match zero, one, some or all rows. Column names
+        # (id, *_id) and an "=" in the predicate prove nothing about
+        # uniqueness. The only narrow-scope credit is a unique key confirmed
+        # by table metadata (backend.row_scope, applied in backend.main).
 
         else:
 
             checklist.extend(
                 [
                     "Verify the expected affected-row count before execution.",
-                    "Consider running the WHERE predicate as SELECT COUNT(*) first.",
+                    CANDIDATE_ROWS_CHECK,
                     "Review the execution plan when database-backed analysis is available.",
                 ]
             )
 
-            # ------------------------------------------------------
-            # KEY-SCOPED WHERE
-            # ------------------------------------------------------
-            #
-            # The original V1.1 behavior/test contract expects:
-            #
-            # UPDATE ... WHERE id = 10
-            #
-            # to receive a 5-point reduction from the UPDATE base
-            # score of 15.
-            #
-            # Therefore:
-            #
-            # 15 - 5 = 10
-            # ------------------------------------------------------
-
-            key_scoped = (
-                _looks_key_scoped(facts)
+            factors.append(
+                ScoreFactor(
+                    "Affected-row count cannot be established from the SQL alone",
+                    5,
+                )
             )
 
-            if key_scoped:
+            reasons.append(OFFLINE_ROW_IMPACT_REASON)
 
-                factors.append(
-                    ScoreFactor(
-                        "WHERE predicate appears key-scoped",
-                        -5,
-                    )
-                )
+            score += 5
 
-                reasons.append(
-                    "The WHERE predicate appears to target a specific key value."
-                )
+        if facts.has_where is True:
 
-                score -= 5
+            checklist.append(CONCURRENCY_CHECK)
 
-            else:
+            if facts.where_has_null_test:
 
-                # A normal bounded predicate is still MEDIUM-risk
-                # in offline mode because we cannot know how many rows
-                # it actually matches.
-
-                factors.append(
-                    ScoreFactor(
-                        "Affected-row count cannot be established from the SQL alone",
-                        5,
-                    )
-                )
-
-                reasons.append(OFFLINE_ROW_IMPACT_REASON)
-
-                score += 5
+                reasons.append(NULL_TEST_REASON)
 
         checklist.append(
             "Confirm the expected business impact before execution."
@@ -431,6 +486,31 @@ def score_statement(
         # The validator should instead determine whether the predicate
         # is narrow and eventually use database evidence to estimate
         # affected rows.
+
+    # --------------------------------------------------------------
+    # EXPLAIN / DESCRIBE OF A STATEMENT THAT CHANGES SOMETHING
+    # --------------------------------------------------------------
+
+    if (
+        statement_type == "DESCRIBE"
+        and facts.explained_statement_type not in (None, "SELECT")
+    ):
+
+        factors.append(
+            ScoreFactor(
+                f"Explains a {facts.explained_statement_type} statement",
+                5,
+            )
+        )
+
+        reasons.append(EXPLAIN_OF_CHANGE_REASON.format(
+            statement_type=facts.explained_statement_type))
+
+        checklist.append(
+            f"Review the explained {facts.explained_statement_type} as if it will be run on its own."
+        )
+
+        score += 5
 
     # --------------------------------------------------------------
     # INSERT
@@ -559,9 +639,13 @@ def score_statement(
     # OFFLINE LIMITATION
     # --------------------------------------------------------------
 
-    confidence = _confidence_for_offline_analysis(facts)
+    confidence = static_confidence(facts)
 
-    if confidence == "LIMITED":
+    if facts.lossy_parse:
+
+        reasons.append(LOSSY_PARSE_REASON)
+
+    if statement_type in STATEMENTS_WITH_ROW_IMPACT:
 
         reasons.append(OFFLINE_EVIDENCE_REASON)
 
@@ -594,7 +678,6 @@ def score_statement(
         and facts.has_where is True
         and not facts.where_looks_trivial
         and score < 20
-        and not _looks_key_scoped(facts)
     ):
         score = 20
 
@@ -612,58 +695,60 @@ def score_statement(
 
 
 # ------------------------------------------------------------------
-# KEY-SCOPED DETECTION
+# EXPLAIN ANALYZE
 # ------------------------------------------------------------------
 
-def _looks_key_scoped(
-    facts: StatementFacts,
-) -> bool:
+EXPLAIN_ANALYZE_UNREADABLE_POINTS = 50
+
+
+def _score_explain_analyze(facts: StatementFacts, batch_size: int) -> StatementReport:
+    """EXPLAIN ANALYZE is scored as the statement it runs.
+
+    MySQL executes the explained statement to time it, so the risk is that
+    statement's risk (an EXPLAIN ANALYZE of a write changes data). When the explained
+    statement cannot be read, the effect is unknown: HIGH risk, LOW confidence.
     """
-    Conservative heuristic for a predicate that appears to target
-    one specific row through an equality condition.
+    inner = None
+    if facts.explained_sql:
+        parsed = parse_sql(facts.explained_sql)
+        if len(parsed) == 1 and not parsed[0].parse_error:
+            inner = parsed[0]
 
-    Examples that may qualify:
+    if inner is None or inner.statement_type in {"UNKNOWN", "DESCRIBE"}:
+        score = min(100, EXPLAIN_ANALYZE_UNREADABLE_POINTS + (10 if batch_size > 1 else 0))
+        return StatementReport(
+            facts=facts,
+            score=score,
+            risk_level=_risk_level(score),
+            confidence="LOW",
+            factors=[ScoreFactor(
+                "EXPLAIN ANALYZE runs a statement that could not be read",
+                EXPLAIN_ANALYZE_UNREADABLE_POINTS,
+            )] + ([ScoreFactor("Part of a multi-statement batch", 10)] if batch_size > 1 else []),
+            findings=[EXPLAIN_ANALYZE_UNREADABLE_REASON] + ([LOSSY_PARSE_REASON] if facts.lossy_parse else []),
+            checklist=[
+                "Do not run this EXPLAIN ANALYZE until the statement it explains has been reviewed.",
+                "Review the explained statement as if it will be run on its own.",
+            ],
+        )
 
-        WHERE id = 10
-        WHERE user_id = 123
-
-    Examples that do not:
-
-        WHERE created_at <= '2026-08-19'
-        WHERE status = 'pending'
-        WHERE id IN (1,2,3)
-    """
-
-    if not facts.columns_in_where:
-        return False
-
-    predicate = (
-        facts.where_predicate_summary or ""
-    ).lower()
-
-    # Must use equality.
-    if "=" not in predicate:
-        return False
-
-    # Avoid treating IN / BETWEEN / range predicates as key-scoped.
-    if " in " in f" {predicate} ":
-        return False
-
-    if "between" in predicate:
-        return False
-
-    # Common primary-key / foreign-key naming patterns.
-    for column in facts.columns_in_where:
-
-        normalized = column.lower().strip()
-
-        if normalized == "id":
-            return True
-
-        if normalized.endswith("_id"):
-            return True
-
-    return False
+    if facts.lossy_parse:
+        inner.lossy_parse = True
+    report = score_statement(inner, batch_size)
+    findings = [EXPLAIN_ANALYZE_REASON.format(statement_type=inner.statement_type)] + [
+        finding for finding in report.findings
+    ]
+    return StatementReport(
+        facts=facts,
+        score=report.score,
+        risk_level=report.risk_level,
+        confidence=report.confidence,
+        factors=[ScoreFactor("EXPLAIN ANALYZE runs the statement it explains", 0)] + report.factors,
+        findings=findings,
+        checklist=_deduplicate([
+            "Do not run EXPLAIN ANALYZE on a statement you would not run on its own.",
+        ] + report.checklist),
+    )
 
 
 # ------------------------------------------------------------------

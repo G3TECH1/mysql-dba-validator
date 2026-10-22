@@ -13,77 +13,15 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from .parser import StatementFacts
+from .parser import NOT_ANALYSED_WORDING, UNREADABLE, StatementFacts
 from . import models
 from .recommendations import recommendations_from_gaps
 from .evidence import affected_row_count_gap, execution_plan_gap, generic_gap
+from .risk_engine import CANDIDATE_ROWS_CHECK, static_confidence
 
 
 # Static-view reason; backend.evidence_state restates it when evidence was attempted.
 OFFLINE_EXECUTION_REASON = "Execution plan and row estimates unavailable in offline mode."
-
-
-def _looks_key_scoped(facts: StatementFacts) -> bool:
-    """Conservative heuristic copied from the V1.1 risk engine logic.
-
-    Returns True when the WHERE predicate appears to target a single row
-    via equality on an "id" or "*_id" column.
-    """
-
-    if not facts.columns_in_where:
-        return False
-
-    predicate = (facts.where_predicate_summary or "").lower()
-
-    if "=" not in predicate:
-        return False
-
-    if " in " in f" {predicate} ":
-        return False
-
-    if "between" in predicate:
-        return False
-
-    for column in facts.columns_in_where:
-        normalized = column.lower().strip()
-
-        if normalized == "id":
-            return True
-
-        if normalized.endswith("_id"):
-            return True
-
-    return False
-
-
-def _confidence_for_offline_analysis(facts: StatementFacts) -> str:
-    if facts.parse_error:
-        return "LOW"
-
-    if facts.statement_type in {
-        "DROP",
-        "TRUNCATE",
-        "CREATE",
-        "ALTER",
-        "GRANT",
-        "REVOKE",
-        "COMMIT",
-        "ROLLBACK",
-        "BEGIN",
-        "START",
-    }:
-        return "HIGH"
-
-    if facts.statement_type in {
-        "UPDATE",
-        "DELETE",
-        "INSERT",
-        "REPLACE",
-        "CALL",
-    }:
-        return "LIMITED"
-
-    return "HIGH"
 
 
 def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
@@ -99,7 +37,7 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
     tables = list(facts.tables or [])
 
     # Confidence in offline analysis
-    confidence = _confidence_for_offline_analysis(facts)
+    confidence = static_confidence(facts)
 
     findings: List[models.Finding] = []
     evidence_gaps: List[models.EvidenceGap] = []
@@ -112,13 +50,15 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
 
     # Parse error => immediate finding
     if facts.parse_error:
+        title, first_check = NOT_ANALYSED_WORDING.get(
+            facts.analysis_status, NOT_ANALYSED_WORDING[UNREADABLE])
         findings.append(models.Finding(
             severity="CRITICAL",
-            title="Parser error — cannot analyze",
+            title=title,
             description=f"{facts.parse_error}",
         ))
 
-        checklist.append("Fix SQL syntax before proceeding.")
+        checklist.append(first_check)
 
         assessment = models.minimal_assessment(100, confidence="LOW")
 
@@ -135,6 +75,8 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
         analysis.assessment.evidence_missing = evidence_gaps
         analysis.assessment.recommendations = recommendations
         analysis.assessment.checklist = checklist
+        # The risk engine reads parse_error from these facts (as in the normal path below).
+        analysis.assessment.source_facts = facts
 
         return analysis
 
@@ -142,16 +84,27 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
     is_write = stmt_type in {"UPDATE", "DELETE", "REPLACE", "INSERT"}
 
     if is_write:
-        if facts.has_where is False:
-            findings.append(models.Finding(
-                severity="HIGH",
-                title="No WHERE clause — potentially affects every row",
-                description=(
-                    "This write operation has no WHERE clause and may modify all rows "
-                    "in the target table(s). Verify the intention and estimate the "
-                    "affected-row count before execution."
-                ),
-            ))
+        if facts.has_where is False or facts.where_always_true:
+            if facts.has_where is False:
+                findings.append(models.Finding(
+                    severity="HIGH",
+                    title="No WHERE clause — potentially affects every row",
+                    description=(
+                        "This write operation has no WHERE clause and may modify all rows "
+                        "in the target table(s). Verify the intention and estimate the "
+                        "affected-row count before execution."
+                    ),
+                ))
+            else:
+                findings.append(models.Finding(
+                    severity="HIGH",
+                    title="WHERE clause is always true — matches every row",
+                    description=(
+                        f"The WHERE predicate ({facts.where_predicate_summary}) is true for every row, "
+                        "so this write matches every row of the target table(s), exactly as with "
+                        "no WHERE clause."
+                    ),
+                ))
 
             checklist.extend([
                 "Confirm that affecting ALL rows is explicitly intended.",
@@ -174,7 +127,7 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
 
             checklist.extend([
                 "Verify that the WHERE predicate actually narrows the target rows.",
-                "Run a SELECT COUNT(*) using the same predicate.",
+                CANDIDATE_ROWS_CHECK,
                 "Review the execution plan before execution.",
             ])
 
@@ -183,39 +136,54 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
                 evidence_gaps.append(execution_plan_gap(table_for_check, facts.where_predicate_summary, stmt_type=stmt_type))
 
         else:
-            # Normal WHERE — still limited offline
+            # Any other WHERE: a structural fact, not evidence of a narrow write.
+            # Only table metadata can establish a unique-key scope (backend.row_scope).
             checklist.extend([
                 "Verify the expected affected-row count before execution.",
-                "Consider running the WHERE predicate as SELECT COUNT(*) first.",
+                CANDIDATE_ROWS_CHECK,
                 "Review the execution plan when database-backed analysis is available.",
             ])
 
-            if not _looks_key_scoped(facts):
-                findings.append(models.Finding(
-                    severity="MEDIUM",
-                    title="Affected-row count is unknown",
-                    description=(
-                        "The predicate appears bounded but the validator cannot determine "
-                        "how many rows it will match without database metadata."
-                    ),
-                ))
+            findings.append(models.Finding(
+                severity="MEDIUM",
+                title="Affected-row count is unknown",
+                description=(
+                    "A WHERE clause can match zero, one, some or all rows. The validator cannot "
+                    "determine how many rows it matches from the SQL alone."
+                ),
+            ))
 
-                if table_for_check:
-                    evidence_gaps.append(affected_row_count_gap(table_for_check, facts.where_predicate_summary))
-                    evidence_gaps.append(execution_plan_gap(table_for_check, facts.where_predicate_summary, stmt_type=stmt_type))
+            if table_for_check:
+                evidence_gaps.append(affected_row_count_gap(table_for_check, facts.where_predicate_summary))
+                evidence_gaps.append(execution_plan_gap(table_for_check, facts.where_predicate_summary, stmt_type=stmt_type))
 
-            else:
-                findings.append(models.Finding(
-                    severity="LOW",
-                    title="WHERE predicate appears key-scoped",
-                    description=(
-                        "The predicate looks like it targets a single row (e.g. equality on an id column). "
-                        "This reduces expected impact but confirm with a SELECT COUNT(*) if unsure."
-                    ),
-                ))
-
-                if table_for_check:
-                    evidence_gaps.append(affected_row_count_gap(table_for_check, facts.where_predicate_summary))
+    # EXPLAIN / DESCRIBE of a statement other than a query. The validator never sends
+    # these; the finding says what MySQL would do with the submitted text.
+    explained = facts.explained_statement_type
+    if stmt_type == "DESCRIBE" and facts.explain_analyze:
+        findings.append(models.Finding(
+            severity="HIGH" if explained not in ("SELECT",) else "MEDIUM",
+            title="EXPLAIN ANALYZE runs the statement it explains",
+            description=(
+                f"MySQL executes the explained {explained or 'statement'} to time it, where it "
+                "accepts EXPLAIN ANALYZE for that statement. Review it as that statement; "
+                "this is scored as the statement it runs."
+                if explained else
+                "MySQL executes the explained statement to time it, and that statement could "
+                "not be read. Its effect is unknown."
+            ),
+        ))
+        checklist.append("Do not run EXPLAIN ANALYZE on a statement you would not run on its own.")
+    elif stmt_type == "DESCRIBE" and explained not in (None, "SELECT"):
+        findings.append(models.Finding(
+            severity="MEDIUM",
+            title=f"EXPLAIN of a {explained} statement",
+            description=(
+                f"EXPLAIN without ANALYZE plans the {explained} without running it, but the text "
+                f"contains a {explained}: run without the EXPLAIN prefix, it changes data."
+            ),
+        ))
+        checklist.append(f"Review the explained {explained} as if it will be run on its own.")
 
     # Stored-procedure calls
     if stmt_type == "CALL":
@@ -280,15 +248,22 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
         if facts.has_where is False:
             data_level = "HIGH"
             data_reason = "No WHERE clause; may affect all rows."
+        elif facts.where_always_true:
+            data_level = "HIGH"
+            data_reason = "WHERE clause is always true; matches every row."
         elif facts.where_looks_trivial:
             data_level = "MEDIUM"
             data_reason = "WHERE predicate appears broad."
-        elif _looks_key_scoped(facts):
-            data_level = "LOW"
-            data_reason = "Predicate appears key-scoped."
         else:
             data_level = "MEDIUM"
-            data_reason = "Affected-row count unknown without DB metadata."
+            data_reason = "Row scope not established from the SQL."
+    elif stmt_type == "DESCRIBE" and facts.explain_analyze and explained != "SELECT":
+        data_level = "HIGH" if explained else "UNKNOWN"
+        data_reason = (f"EXPLAIN ANALYZE runs the explained {explained}." if explained
+                       else "EXPLAIN ANALYZE runs a statement that could not be read.")
+    elif stmt_type == "DESCRIBE" and explained not in (None, "SELECT"):
+        data_level = "MEDIUM"
+        data_reason = f"Plans a {explained} without running it; the {explained} changes data if run on its own."
     else:
         data_level = "LOW"
         data_reason = "Read-only or no data mutation detected."
@@ -317,9 +292,9 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
         scope_level = "MEDIUM"
         scope_reason = "Multiple tables referenced; broader scope."
     else:
-        if is_write and facts.has_where is False:
+        if is_write and (facts.has_where is False or facts.where_always_true):
             scope_level = "HIGH"
-            scope_reason = "Single-target write without WHERE may still affect all rows."
+            scope_reason = "Single-target write without a restricting WHERE may affect all rows."
         else:
             scope_level = "LOW"
             scope_reason = "Targeting a single table."
@@ -352,7 +327,8 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
     # Recommendations derived from evidence gaps
     recommendations.extend(recommendations_from_gaps(evidence_gaps))
 
-    # Prepare an initial conservative RiskAssessment (score 0, unknown until risk engine runs)
+    # Score and risk level are placeholders here; backend.main fills them from the
+    # final report before the assessment is returned (never 0 / UNKNOWN to a client).
     assessment = models.RiskAssessment(
         overall_score=0,
         risk_level="UNKNOWN",

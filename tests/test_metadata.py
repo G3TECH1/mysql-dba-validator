@@ -2,6 +2,7 @@ from backend.db_evidence import DatabaseEvidence
 from backend.main import ValidateRequest, validate
 from tests.local_evidence import local_request, use_fake_evidence_connection
 from backend.metadata import MetadataConfig, collect_metadata
+from tests.read_only_session import ConfirmingConnection
 import pytest
 
 
@@ -100,7 +101,8 @@ def test_metadata_uses_existing_dbclient_readonly_connection_method():
 
         def connect_readonly(self, read_timeout):
             calls.append(read_timeout)
-            return FakeConnection(metadata_rows())
+            # The fallback connection must be confirmed read-only (review L2).
+            return ConfirmingConnection(FakeConnection(metadata_rows()))
 
     original = __import__("backend.metadata", fromlist=["get_client"]).get_client
     try:
@@ -373,6 +375,7 @@ def test_collector_backed_m1_integration_applies_additive_adjustment(monkeypatch
         lambda sql, **_kwargs: DatabaseEvidence(
             available=True,
             explain_available=True,
+            plan_row_count=1,
             estimated_rows=500,
             access_type="ALL",
             full_table_scan=True,
@@ -422,6 +425,7 @@ def test_collector_backed_metadata_reaches_m1_and_m2(monkeypatch):
         lambda sql, **_kwargs: DatabaseEvidence(
             available=True,
             explain_available=True,
+            plan_row_count=1,
             estimated_rows=500,
             access_type="ALL",
             full_table_scan=True,
@@ -456,6 +460,7 @@ def test_collector_backed_m1_integration_rejects_rows_below_threshold(monkeypatc
         lambda sql, **_kwargs: DatabaseEvidence(
             available=True,
             explain_available=True,
+            plan_row_count=1,
             estimated_rows=500,
             access_type="ALL",
             full_table_scan=True,
@@ -492,6 +497,7 @@ def test_collector_backed_m1_integration_rejects_tables_sentinel_truncation(monk
         lambda sql: DatabaseEvidence(
             available=True,
             explain_available=True,
+            plan_row_count=1,
             estimated_rows=500,
             access_type="ALL",
             full_table_scan=True,
@@ -675,7 +681,7 @@ def test_metadata_passes_configured_timeout_to_driver_connection(monkeypatch):
 
         def connect_readonly(self, read_timeout):
             calls.append(read_timeout)
-            return connection
+            return ConfirmingConnection(connection)
 
     monkeypatch.setattr("backend.metadata.get_client", lambda: Client())
     result = collect_metadata(

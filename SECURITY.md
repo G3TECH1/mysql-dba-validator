@@ -38,12 +38,41 @@ How the components and request flows fit together is described in
   one connection to the selected database that is closed when the validation
   ends. The login is not saved and there is no other credential source.
 - MySQL account privileges are the authorization boundary; the validator's
-  statement restrictions are the application safety boundary. Setting the
-  evidence connection to read-only transactions is defense in depth only.
-- On the local read-only evidence connection, a plan request is sent only when
-  the exact outgoing statement is one plain `SELECT` (no `INTO`). `UPDATE`,
-  `DELETE` and everything else get no plan request; there is no writable
-  evidence connection and no switch to enable one.
+  statement restrictions are the application safety boundary.
+- Every evidence connection, local and company, is set to read-only
+  transactions and MySQL must confirm it (`@@SESSION.transaction_read_only`
+  reads back as 1) before any evidence query, and again on the same cursor
+  immediately before each plan request. Without that confirmation nothing is
+  sent, the connection is closed and no further evidence is collected on it.
+  *(Main branch, after v0.4.1. In v0.4.1 and earlier only the local
+  connection was set read-only, without the read-back, and company
+  connections were not.)*
+- The read-only transaction is a second control, not a guarantee about
+  functions. The MySQL manual says a read-only transaction prohibits changes
+  to tables, but temporary tables stay writable, and it does not stop a
+  function from sleeping, taking locks or otherwise using the server. It is
+  also a session setting, not a privilege: it does not replace a
+  least-privileged account. Whether a real server keeps it through every
+  route (for example a connection-multiplexing proxy) has not been tested.
+- A plan request is sent only when the exact outgoing statement is one plain
+  `SELECT` with no `INTO` and no locking clause, and every word written
+  directly before `(` in both the submitted text and the outgoing text is on a
+  reviewed list of MySQL 8.4 built-in functions and reserved syntax words
+  (`backend/db_evidence.py`, `PERMITTED_CALL_NAMES`). A name sqlglot happens to
+  recognise is not enough: names such as `SPLIT` or `LEVENSHTEIN` are not MySQL
+  built-ins, and MySQL resolves them to a loadable or stored function. Quoted
+  and schema-qualified calls (`` `f`(x) ``, `db.f(x)`) are always refused, as
+  is any name that is not a plain ASCII word (`fünf(x)`, `1split(x)`) and any
+  literal written before `(` (`9e(x)`),
+  and so are functions that sleep, wait, take locks, read files, or read or
+  change session state. A statement that fails this check is still analysed;
+  only its plan is not requested. This relies on the manual's rule that an
+  unqualified built-in name resolves to the built-in; how a real server
+  resolves and evaluates functions during `EXPLAIN` has not been tested.
+- `UPDATE`, `DELETE` and everything else get no plan request, locally or
+  through the connector, so the validator never needs an account with write
+  privileges. There is no writable evidence connection and no switch to
+  enable one.
 - Each result reports its database evidence from what was actually collected
   (the per-statement `evidence` object). Missing or failed evidence never
   lowers a risk score and never changes confidence. A plan is reported only
@@ -63,7 +92,12 @@ How the components and request flows fit together is described in
 - Local evidence runs with the privileges of the login you enter, so prefer
   the least-privileged account that can review the SQL. (v0.2.0 instead used a
   plain-text `.env` account for local evidence.)
-- Local `UPDATE`/`DELETE` statements get no execution-plan evidence, because
-  the evidence connection is read-only and MySQL refuses `EXPLAIN` of writes
-  there. Static analysis and table metadata still apply.
+- `UPDATE`/`DELETE` statements get no execution-plan evidence, locally or
+  through the connector, because evidence connections are read-only and MySQL
+  refuses `EXPLAIN` of writes there. Static analysis and table metadata still
+  apply; a unique key confirmed in table metadata can still bound a write to at
+  most one row.
+- Grant the evidence account only what review needs: `SELECT` on the tables
+  under review (for `EXPLAIN SELECT` and table metadata). Do not grant `UPDATE`
+  or `DELETE` to obtain plans; the validator never requests write plans.
 - Release builds are not code-signed. Verify the published SHA256 checksum.

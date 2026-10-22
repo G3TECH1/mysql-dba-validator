@@ -1,8 +1,10 @@
+from backend.db import READ_ONLY_CHECK_SQL, READ_ONLY_SESSION_SQL
 from backend.db import AnalysisSession, ConnectionProfile, DBClient, DBConfig
 from backend.db_evidence import DatabaseEvidence, collect_statement_evidence
 from backend.main import ValidateRequest, validate
 from tests.local_evidence import (
     FAKE_LOGIN, FakeEvidenceConnection, local_request, use_fake_evidence_connection)
+from tests.read_only_session import ConfirmingConnection
 from backend.metadata import MetadataEvidence, collect_metadata
 
 
@@ -12,8 +14,12 @@ class EvidenceCursor:
 
     def execute(self, sql, *params):
         self.calls.append(("execute", sql, params))
+        self.last = sql
 
     def fetchall(self):
+        if getattr(self, "last", "") == READ_ONLY_CHECK_SQL:
+            # The read-back before each plan request (MySQL confirms the session).
+            return [{"transaction_read_only": 1}]
         return [{
             "id": 1,
             "table": "users",
@@ -26,6 +32,8 @@ class EvidenceCursor:
         }]
 
     def fetchone(self):
+        if getattr(self, "last", "") == READ_ONLY_CHECK_SQL:
+            return {"transaction_read_only": 1}
         return {"db_name": "selected_db"}
 
     def close(self):
@@ -121,8 +129,10 @@ def test_validate_propagates_selected_database_without_modifying_sql(monkeypatch
     connection = FakeEvidenceConnection()
     use_fake_evidence_connection(monkeypatch, connection)
 
-    def fake_evidence(sql, connection=None):
+    def fake_evidence(sql, connection=None, source_facts=None):
         captured.append(("evidence", sql, connection))
+        # The collector also receives the statement's own parse facts (review M2).
+        assert source_facts is not None and source_facts.raw_sql == sql
         return DatabaseEvidence(available=False, error="explain_failed")
 
     def fake_metadata(tables, connection=None, database=None):
@@ -165,7 +175,10 @@ def test_evidence_connection_receives_selected_database_and_never_uses_use(monke
     assert result.available is True
     assert client_calls == [selected_session()]
     executed_sql = [call[1] for call in calls if call[0] == "execute"]
-    assert executed_sql[0] == "EXPLAIN SELECT * FROM users WHERE id = 1;"
+    # The session is confirmed read-only first, read back again on the cursor that
+    # sends the plan (review M1), then the plan is requested.
+    assert executed_sql[:4] == [READ_ONLY_SESSION_SQL, READ_ONLY_CHECK_SQL, READ_ONLY_CHECK_SQL,
+                                "EXPLAIN SELECT * FROM users WHERE id = 1;"]
     assert all(not sql.upper().startswith("USE ") for sql in executed_sql)
     assert submitted_sql not in executed_sql
     assert connection.closed is True
@@ -234,7 +247,8 @@ def test_metadata_connection_and_all_query_scopes_receive_selected_database(monk
     class Client:
         def connect_readonly(self, read_timeout, session=None):
             client_calls.append(session)
-            return connection
+            # The fallback connection must be confirmed read-only too (review L2).
+            return ConfirmingConnection(connection)
 
     monkeypatch.setattr("backend.metadata.get_client", lambda: Client())
     session = selected_session()
@@ -275,7 +289,7 @@ def test_metadata_dbclient_connection_uses_selected_database(monkeypatch):
         @staticmethod
         def connect(**kwargs):
             connect_calls.append(kwargs)
-            return connection
+            return ConfirmingConnection(connection)
 
     monkeypatch.setitem(__import__("sys").modules, "pymysql", FakePyMySQL)
     client = DBClient(DBConfig(

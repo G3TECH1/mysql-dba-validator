@@ -1,7 +1,10 @@
 # Runtime dependencies
 fastapi>=0.104.0,<1.0.0
 uvicorn[standard]>=0.24.0,<1.0.0
-sqlglot>=23.0.0,<31.0.0
+# The execution-plan safety checks rely on sqlglot's tokenizer and SQL regeneration
+# (comment neutralisation, quote doubling, statement splitting). They are tested on
+# 30.17.0 and 30.21.0 (the release pin); tests/test_review_remediation.py checks them.
+sqlglot>=30.17.0,<31.0.0
 python-dotenv>=1.0.0,<2.0.0
 pymysql>=1.0.0,<2.0.0
 cryptography>=42.0.0,<46.0.0

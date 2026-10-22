@@ -80,6 +80,10 @@ class FakeCursor:
     def fetchall(self):
         raise AssertionError("unbounded fetchall must not be used")
 
+    def fetchone(self):
+        # Answers backend.db.READ_ONLY_CHECK_SQL: the session is confirmed read-only.
+        return {"transaction_read_only": 1}
+
     def close(self):
         self.log.append("cursor_closed")
 

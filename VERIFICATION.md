@@ -33,7 +33,8 @@ than a recorded one.
 | Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below). Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
 | Remote/company workflow (local connector) end to end against a real MySQL server | **Reported by the maintainer** (manual test, recorded after the v0.4.1 release): successful on Windows against an AWS RDS for MySQL test database the maintainer created. No transcript or logs were provided for this record; see [below](#remote-workflow-against-aws-rds-for-mysql-maintainer-reported) |
 | Real company MySQL, VPN/LAN connectivity, company-issued TLS, hosted HTTPS frontend | **Not verified** |
-| Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan, which only the remote connector path collects. Automated tests only |
+| Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan. In v0.4.1 only the remote connector path collected one; on main neither path does (see below), so M1 does not arise in practice. Automated tests only |
+| Evidence contract revision (main, after v0.4.1, unreleased) | Automated tests only; no live-server check has been run. See [below](#evidence-contract-revision-main-after-v041-unreleased) |
 
 ## Automated test suite
 
@@ -64,6 +65,18 @@ section). The suite covers, among others:
 - **Credential handling:** `test_validation_error_redaction.py`,
   `test_security_hardening.py` and the credential tests above check that
   submitted credentials never appear in responses, errors or logs.
+- **Row scope, risk and confidence (contract W1–W12):** `test_row_scope.py`,
+  with fake servers that return explicit schema metadata (`NON_UNIQUE`,
+  `DATA_TYPE`), never inferred from column names.
+- **Pre-commit review fixes:** `test_review_remediation.py`: the function
+  list for plan requests (names sqlglot knows that are not MySQL built-ins,
+  quoted and qualified calls, nesting, rewriting), always-true `WHERE`,
+  `EXPLAIN ANALYZE` and `DESCRIBE` scoring, the per-plan read-only read-back,
+  and the collector's own eligibility checks.
+- **Read-only boundary:** `test_read_only_boundary.py`: only allowlisted
+  queries reach MySQL for every statement type on both paths, a session MySQL
+  does not confirm as read-only gets no evidence query, TLS still requires a
+  CA with certificate and host-name checks, and multi-statement mode stays off.
 - **Page and packaging:** `test_frontend_served_page.py`,
   `test_frontend_evidence_rendering.py` (real Chrome; skipped if Chrome is not
   installed), `test_heartbeat.py`, `test_release_packaging.py`.
@@ -172,6 +185,55 @@ What it does not establish:
 - error paths against RDS (rejected logins, unreachable targets, DNS changes,
   certificate failures) and behaviour under production workloads.
 
+## Evidence contract revision (main, after v0.4.1, unreleased)
+
+The changes in
+[docs/v2-database-evidence-contract.md](docs/v2-database-evidence-contract.md)
+are in the main working tree, not in a release. The live checks marked
+**Not run** below are written up as cases, with fixtures, expected results and
+cleanup, in
+[docs/v2-live-mysql-validation-plan.md](docs/v2-live-mysql-validation-plan.md).
+
+**Execution plans (2026-10-22):** after a one-day removal (2026-10-21), plan
+collection for `SELECT` is restored. An eligible `SELECT` is sent to MySQL only as
+plain `EXPLAIN <SELECT>` on the confirmed read-only evidence connection; the
+statement itself is never executed, no result rows are fetched and `EXPLAIN
+ANALYZE` is never used. A plan that MySQL returns in a non-tabular format
+(`explain_format` TREE or JSON, MySQL 8.0.32+) is reported as not collected
+(`explain_format_unsupported`). Checked with fake connections only
+(`tests/test_no_submitted_sql.py`); no live server.
+
+**Live Run A status (local MySQL 8.0.45, 2026-10-21): not completed.** The
+maintainer ran the read-only preflight (client and server 8.0.45; binary
+logging, Performance Schema and the statement consumers on; InnoDB default; no
+anonymous accounts; no `validator_live_test` schema, no `vt_*` accounts, no
+replication) and started script 01 by hand. The `GRANT` to `vt_observer`
+returned error 1410 (`ER_CANT_CREATE_USER_WITH_GRANT`: in MySQL 8.0 `GRANT`
+cannot create an account, so that account did not exist when the `GRANT` ran).
+The resulting state of the schema and the three accounts has not been
+confirmed. No validation case has been run, so no row of the plan's section 9
+is live-verified. The digest checks are blocked until either `vt_observer`
+exists with its one grant, or the administrator runs `05` instead (plan
+section 2); no wider Performance Schema grant is to be used.
+
+| Check | Result | Environment and evidence source |
+| --- | --- | --- |
+| Full automated suite, after the pre-commit review fixes, the one-row write floor and the unusual-name fix | 1182 passed, 11 skipped, 4 failed, both with sqlglot 30.17.0 (installed) and with 30.21.0 (the release pin, loaded from a scratch directory) | Windows 10, Python 3.13.5 (the project targets 3.14), maintainer's machine, 2026-10-21. The 4 failures are `test_windows_test_step_fails_when_any_command_fails`, which cannot run there: no `pwsh`, and the execution policy blocks scripts. They pass in CI on `pwsh`. The 11 skips are macOS/POSIX-only tests |
+| Review regression tests (function policy, always-true `WHERE`, `EXPLAIN ANALYZE`, read-back, collector boundary, one-row write floor, unusual call names) | 197 passed; 104 of the first 154 fail against the code before the fixes, and 7 of the 32 unusual-name tests fail against the code before that fix | Same; fake MySQL and the installed sqlglot |
+| Row-scope acceptance tests (W1–W12) | 59 passed | Same; fake MySQL with explicit schema metadata |
+| Read-only boundary tests | 49 passed | Same; fake MySQL. Every `EXPLAIN` sent must pass the final check and the function list |
+| Real-Chrome rendering of scope, headlines, warnings and batch confidence | Passed | Same, Google Chrome headless |
+| CI tag run, packaged build, audit, smoke test | **Not run** | No release was built; the build needs Python 3.14 |
+| `SET SESSION TRANSACTION READ ONLY` then `@@SESSION.transaction_read_only` = 1 on MySQL 8.4 | **Not run** | No authorized 8.4 test server |
+| `EXPLAIN UPDATE`/`DELETE` refused with error 1792 on a read-only session, 8.4 | **Not run** | v0.3.0's maintainer test observed it on a server whose version was not recorded |
+| Unique, composite, prefix and nullable-unique index metadata on 8.4 | **Not run** | |
+| Whether `EXPLAIN SELECT` evaluates a stored function on 8.4 | **Not run** | Percona showed it on 8.0.21 and earlier; the validator plans only statements whose calls are on its reviewed built-in list, under a read-only session |
+| How 8.4 resolves a stored or loadable function named like a non-MySQL function (`split`, `levenshtein`) and like a listed built-in (`upper`) | **Not run** | The function list relies on the manual's name-resolution rule |
+| Whether evaluated SQL (a stored function) can change `transaction_read_only` between statements, and whether the per-plan read-back catches it | **Not run** | Fake servers only |
+| Read-only session through a connection-multiplexing proxy (ProxySQL, RDS Proxy) | **Not run** | |
+| The same checks on MySQL 8.0 (compatibility only) | **Not run** | |
+| Company Mode through the connector against AWS RDS | **Not run for this revision** | The maintainer-reported RDS test (above) used the v0.4.1-era code and is not evidence for these changes |
+
 ## Not verified
 
 - Remote/company workflow against real company infrastructure: company MySQL,
@@ -180,8 +242,9 @@ What it does not establish:
   been run locally with a stand-in target, and the maintainer reports one
   successful end-to-end test against an AWS RDS for MySQL test database
   (above).
-- Remote `UPDATE`/`DELETE` plans and the positive M1 and M2 adjustments
-  against a live database.
+- The positive M1 and M2 adjustments against a live database (on main they
+  need an `UPDATE`/`DELETE` plan, which is no longer requested).
+- Every live-server check of the evidence contract revision (below).
 - Platforms other than Windows x64 on a real machine. The v0.4.1 macOS (Apple
   Silicon) unsigned zip has been tested only in CI; see below.
 

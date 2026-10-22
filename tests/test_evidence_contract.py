@@ -132,7 +132,7 @@ def test_local_select_with_plan_and_metadata(mysql):
     statement = only(data)
     assert statement["evidence"] == {
         "connection": {"state": "connected", "reason": None},
-        "plan": {"state": "collected", "reason": None},
+        "plan": {"state": "collected", "reason": None, "rows": 1, "interpreted": True},
         "metadata": {"state": "collected", "reason": None, "tables": [{"name": "users", "found": True}]},
         "overall": "collected",
     }
@@ -165,7 +165,7 @@ def test_local_dml_has_metadata_and_an_intentionally_uncollected_plan(mysql, sql
     # The "Why" tells the evidence story: metadata yes, plan deliberately not collected.
     why = " ".join(statement["reasons"])
     assert "table metadata was collected" in why
-    assert "not collected because the local evidence connection is read-only" in why
+    assert "not collected because the evidence connection is read-only" in why
     assert "Actual affected-row counts are not known." in why
     gaps = {gap["name"]: gap["reason"] for gap in statement["v2_assessment"]["evidence_missing"]}
     assert "read-only" in gaps["execution_plan"]
@@ -238,7 +238,19 @@ def assert_not_eligible_without_a_plan(statement):
     assert statement["database_evidence"]["explain_available"] is False
     assert statement["database_evidence"]["access_type"] is None
     assert statement["evidence_factors"] == []
-    assert statement["confidence"] == "HIGH"
+    # Forms that only parse permissively lose their INTO: the analysed text is not the
+    # submitted text, so the assessment cannot be HIGH confidence.
+    assert statement["confidence"] == ("LOW" if statement["analysis_text_differs"] else "HIGH")
+
+
+@pytest.mark.parametrize("sql", SELECT_INTO_FORMS)
+def test_select_into_forms_report_whether_the_analysed_text_differs(mysql, sql):
+    from backend.parser import parse_sql
+
+    statement = only(local(sql))
+    assert statement["analysis_text_differs"] is parse_sql(sql)[0].lossy_parse
+    if statement["analysis_text_differs"]:
+        assert any("could only be read partly" in reason for reason in statement["reasons"])
 
 
 @pytest.mark.parametrize("sql", SELECT_INTO_FORMS)
@@ -311,7 +323,7 @@ def test_an_unknown_gap_is_never_closed_by_unrelated_evidence():
     from backend.models import EvidenceGap, minimal_assessment
 
     collected = {"connection": {"state": "connected", "reason": None},
-                 "plan": {"state": "collected", "reason": None},
+                 "plan": {"state": "collected", "reason": None, "rows": 1, "interpreted": True},
                  "metadata": {"state": "collected", "reason": None, "tables": []},
                  "overall": "collected"}
     assessment = minimal_assessment(0, confidence="HIGH")
@@ -380,16 +392,27 @@ def test_missing_evidence_never_reduces_risk_or_changes_confidence(mysql):
     sqls = ["UPDATE users SET active = 0 WHERE status = 'pending'", "DELETE FROM users",
             "SELECT * FROM users WHERE id = 1", "UPDATE users SET active = 0 WHERE id = 1",
             "INSERT INTO users (id) VALUES (1)", "DROP TABLE users"]
-    failures = [None, mysql_error(1045, "denied"), mysql_error(2003, "unreachable")]
+    failures = [mysql_error(1045, "denied"), mysql_error(2003, "unreachable")]
     for sql in sqls:
         static = only(local(sql, username=None, password=None))
         for failure in failures:
             mysql.connect_error = failure
             statement = only(local(sql))
-            assert statement["score"] >= static["score"], (sql, failure)
+            assert statement["score"] == static["score"], (sql, failure)
             assert statement["risk_level"] == static["risk_level"], (sql, failure)
             assert statement["confidence"] == static["confidence"], (sql, failure)
         mysql.connect_error = None
+        # With evidence collected, the only change that can lower a score or raise
+        # confidence is a unique key confirmed in table metadata.
+        statement = only(local(sql))
+        if statement["scope"]["basis"] == "at_most_one_row":
+            assert sql == "UPDATE users SET active = 0 WHERE id = 1"
+            # The credit is -10 but never below the MEDIUM floor (score 20) for writes.
+            assert statement["score"] == max(static["score"] - 10, 20) and statement["confidence"] == "HIGH"
+            assert statement["risk_level"] != "LOW"
+        else:
+            assert statement["score"] >= static["score"], sql
+            assert statement["confidence"] == static["confidence"], sql
 
 
 # ---------------------------------------------------------------- remote (connector) semantics
@@ -414,15 +437,16 @@ def test_remote_select_has_the_same_evidence_meaning(monkeypatch):
     assert data["analysis_mode"] == "DATABASE_EVIDENCE"
 
 
-def test_remote_dml_keeps_its_plan_collection_and_reports_it(monkeypatch):
-    """Remote DML plans are collected under the connector's own rules (unchanged)."""
+def test_remote_dml_plan_is_never_requested(monkeypatch):
+    """Company connections are read-only like local ones: no write plan is requested."""
     server = remote.FakeServer(explain=[remote.explain_row("ALL", 500, extra="Using where")], table_rows=250_000)
     data = remote_data(monkeypatch, server, "UPDATE users SET active = 0 WHERE status = 'old'")
     statement = only(data)
-    assert any(sql.startswith("EXPLAIN UPDATE") for sql, _ in server.executed)
-    assert statement["evidence"]["plan"]["state"] == "collected"
+    assert not any(sql.startswith("EXPLAIN") for sql, _ in server.executed)
+    assert statement["evidence"]["plan"] == {"state": "not_collected_read_only",
+                                             "reason": "plan_not_collected_read_only"}
     assert statement["confidence"] == "LIMITED"
-    assert statement["score"] > statement["static_score"]
+    assert statement["score"] == statement["static_score"]
 
 
 def test_remote_without_a_database_reports_metadata_as_not_requested(monkeypatch):

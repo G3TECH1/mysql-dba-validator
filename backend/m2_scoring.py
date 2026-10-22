@@ -147,6 +147,41 @@ def _has_matching_leading_index(metadata: Any, schema: str, table: str, column_n
     return False
 
 
+def describe_filter_index(facts: Any, metadata: Any) -> dict[str, Any]:
+    """What can be said about the statement's filter and the table's indexes. Display only:
+    it never changes a score (apply_m2_adjustment does that, under its own conditions).
+
+    no_filter: no WHERE. not_assessed: the filter is not one column compared with a literal
+    on one table. not_checked: complete table and index metadata were not available.
+    matching_index / no_matching_index: whether an index's leading column is the filter
+    column, from table metadata. Says nothing about whether MySQL would use that index.
+    """
+    try:
+        if facts.statement_type not in {"SELECT", "UPDATE", "DELETE"} or not facts.tables:
+            return {"state": "not_applicable"}
+        if facts.has_where is not True:
+            return {"state": "no_filter"}
+        bindings = getattr(facts, "table_bindings", [])
+        if (len(bindings) != 1 or facts.predicate_shape != M2_PREDICATE_SHAPE
+                or facts.predicate_table_association != "UNAMBIGUOUS"
+                or not _predicate_belongs_to_binding(facts, bindings[0])):
+            return {"state": "not_assessed"}
+        column = facts.predicate_columns[0].name
+        table = getattr(bindings[0], "table", None)
+        if getattr(metadata, "status", None) != "available":
+            return {"state": "not_checked", "column": column, "table": table}
+        schema = _resolve_schema(metadata, bindings[0])
+        if (not isinstance(schema, str) or not _table_metadata_is_eligible(metadata, schema, table)
+                or not _statistics_is_eligible(metadata, schema, table)):
+            return {"state": "not_checked", "column": column, "table": table}
+        matching = _has_matching_leading_index(metadata, schema, table, column)
+        if matching is None:
+            return {"state": "not_checked", "column": column, "table": table}
+        return {"state": "matching_index" if matching else "no_matching_index", "column": column, "table": table}
+    except Exception:
+        return {"state": "not_checked"}
+
+
 def apply_m2_adjustment(
     phase2_report: Any,
     metadata: Any,
@@ -166,7 +201,7 @@ def apply_m2_adjustment(
     try:
         facts = phase2_report.facts
         if (
-            facts.statement_type not in {"UPDATE", "DELETE"}
+            facts.statement_type not in {"UPDATE", "DELETE", "SELECT"}
             or (phase2_risk_level or phase2_report.risk_level) == "CRITICAL"
             or facts.has_where is not True
             or len(getattr(facts, "table_bindings", [])) != 1

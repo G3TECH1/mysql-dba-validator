@@ -29,11 +29,14 @@ def test_recommendations_from_gaps():
 def test_evidence_helpers():
     g1 = evidence_mod.affected_row_count_gap("users", "id = 1")
     assert g1.name == "affected_row_count"
-    assert "SELECT COUNT(*) FROM users WHERE id = 1" in g1.suggested_check
+    # Manual guidance only: no query is derived from the submitted table or predicate.
+    assert "SELECT COUNT" not in g1.suggested_check and "id = 1" not in g1.suggested_check
+    assert "point-in-time" in g1.suggested_check
 
     g2 = evidence_mod.execution_plan_gap("orders", "created_at <= '2026-01-01'", stmt_type="UPDATE")
     assert g2.name == "execution_plan"
-    assert "EXPLAIN UPDATE orders" in g2.suggested_check
+    assert "orders" not in g2.suggested_check and "created_at" not in g2.suggested_check
+    assert "executes the statement" in g2.suggested_check
 
 
 def test_analyzer_produces_assessment_and_gaps():
@@ -80,6 +83,7 @@ def test_mixed_batch_aggregate_uses_maximum_final_score(monkeypatch):
         lambda sql, **_kwargs: DatabaseEvidence(
             available=True,
             explain_available=True,
+            plan_row_count=1,
             estimated_rows=500,
             access_type="ALL",
             full_table_scan=True,
@@ -202,7 +206,8 @@ def test_statement_count_uses_parser_boundaries_not_semicolons(monkeypatch):
 
 
 def test_empty_and_malformed_sql_preserve_existing_behavior():
-    assert validate(ValidateRequest(sql="   "))["statement_count"] == 0
+    # Empty input is refused (batch contract: no statements is not a LOW-risk result).
+    assert validate(ValidateRequest(sql="   ")) == {"error": "no_statements"}
     malformed = validate(ValidateRequest(sql="SELECT ("))
     assert malformed["statement_count"] == 1
     assert "statements" in malformed

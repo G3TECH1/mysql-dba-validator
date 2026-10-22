@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 import backend.main as backend_main
 import backend.metadata as backend_metadata
 import connector.server as connector_server
+from backend.db import READ_ONLY_CHECK_SQL, READ_ONLY_SESSION_SQL, enforce_read_only_session
 from backend.main import validate as local_validate
 from connector.policy import CompanyTarget
 from connector.server import CompanyTargetDestination, ConnectorRuntime, create_app
@@ -44,13 +45,24 @@ class FakeServer:
         self.metadata_error = metadata_error
         self.tuple_rows = tuple_rows
         self.executed = []
+        # Like MySQL: SET SESSION TRANSACTION READ ONLY makes the session read-only,
+        # @@SESSION.transaction_read_only reports it, and EXPLAIN of a write is then
+        # refused with error 1792.
+        self.read_only = False
 
     def rows_for(self, sql, args):
         self.executed.append((sql, args))
         text = sql.strip()
+        if text == READ_ONLY_SESSION_SQL:
+            self.read_only = True
+            return []
+        if text == READ_ONLY_CHECK_SQL:
+            return [{"transaction_read_only": 1 if self.read_only else 0}]
         if text == "SHOW DATABASES":
             return [{"Database": DB}, {"Database": "reporting"}]
         if text.startswith("EXPLAIN"):
+            if self.read_only and text.upper().startswith(("EXPLAIN UPDATE", "EXPLAIN DELETE")):
+                raise RuntimeError((1792, "Cannot execute statement in a READ ONLY transaction."))
             if isinstance(self.explain, Exception):
                 raise self.explain
             return [dict(row) for row in self.explain]
@@ -164,26 +176,34 @@ def remote_validate(monkeypatch, server, sql, *, database=DB):
 def local_validate_with(monkeypatch, server, sql):
     """Local /api/validate with the same fake server as its per-request evidence
     connection: both paths now run the real shared collectors on one connection."""
-    use_fake_evidence_connection(monkeypatch, FakeConnection(server))
+    # As in production, the connection is confirmed read-only before evidence collection.
+    use_fake_evidence_connection(monkeypatch, enforce_read_only_session(FakeConnection(server)))
     return jsonable_encoder(local_validate(local_request(sql, database=DB)))
 
 
 # ---------------------------------------------------------------- remote == local scoring semantics
 
+# Both paths use a confirmed read-only session: UPDATE/DELETE plans are never requested
+# (not_collected_read_only), SELECT plans are. The narrow-scope credit comes only from a
+# unique key confirmed in table metadata, never from EXPLAIN.
 SCENARIOS = {
-    "full_scan_update_metadata_available": dict(
+    "write_with_metadata_no_plan": dict(
         sql="UPDATE users SET active = 0 WHERE status = 'old'",
         server=dict(explain=[explain_row("ALL", 500, extra="Using where")], table_rows=250_000)),
-    "full_scan_update_metadata_unavailable": dict(
+    "write_metadata_unavailable": dict(
         sql="UPDATE users SET active = 0 WHERE status = 'old'",
         server=dict(explain=[explain_row("ALL", 500, extra="Using where")],
                     metadata_error=RuntimeError("SELECT command denied"))),
-    "high_estimated_rows_delete": dict(
+    "range_delete_no_plan": dict(
         sql="DELETE FROM users WHERE created_at < '2020-01-01'",
         server=dict(explain=[explain_row("range", 50_000, key="idx_created")])),
-    "indexed_selective_update": dict(
+    "verified_primary_key_update": dict(
         sql="UPDATE users SET active = 0 WHERE id = 5",
         server=dict(explain=[explain_row("const", 1, key="PRIMARY")])),
+    "non_unique_key_update": dict(
+        sql="UPDATE users SET active = 0 WHERE customer_id = 42",
+        server=dict(explain=[explain_row("ref", 9_000, key="idx_customer")],
+                    indexes=[("PRIMARY", "id", 1, 0), ("idx_customer", "customer_id", 1, 1)])),
     "select": dict(
         sql="SELECT * FROM users WHERE id = 1",
         server=dict(explain=[explain_row("const", 1, key="PRIMARY")])),
@@ -193,8 +213,8 @@ SCENARIOS = {
     "unrestricted_update_no_reduction": dict(
         sql="UPDATE users SET active = 0",
         server=dict(explain=[explain_row("const", 1, key="PRIMARY")])),
-    "evidence_unavailable": dict(
-        sql="UPDATE users SET active = 0 WHERE id = 5",
+    "select_plan_failed": dict(
+        sql="SELECT * FROM users WHERE id = 5",
         server=dict(explain=RuntimeError("Table 'appdb.users' doesn't exist"))),
 }
 
@@ -202,48 +222,68 @@ SCENARIOS = {
 @pytest.mark.parametrize("name", list(SCENARIOS))
 def test_remote_validation_matches_local_evidence_scoring(monkeypatch, name):
     scenario = SCENARIOS[name]
-    remote, _ = remote_validate(monkeypatch, FakeServer(**scenario["server"]), scenario["sql"])
+    remote_server = FakeServer(**scenario["server"])
+    remote, _ = remote_validate(monkeypatch, remote_server, scenario["sql"])
     assert remote.status_code == 200, remote.text
     local = local_validate_with(monkeypatch, FakeServer(**scenario["server"]), scenario["sql"])
-    # Every field: score, risk_level, confidence, reasons, checklist, factors,
-    # evidence_factors, metadata_*, high_estimated_rows_applied, database_evidence,
-    # analysis_mode and the overall score/risk level.
+    # Every field: score, risk_level, confidence, scope, reasons, checklist, factors,
+    # evidence_factors, metadata_*, database_evidence, analysis_mode and the batch fields.
     assert remote.json() == local
 
     statement = remote.json()["statements"][0]
     labels = {factor["label"]: factor["points"] for factor in statement["evidence_factors"]}
-    metadata_codes = {factor["code"] for factor in statement["metadata_factors"]}
+    # No write plan is ever requested, and no plan ever lowers a score.
+    assert not any(sql.strip().upper().startswith(("EXPLAIN UPDATE", "EXPLAIN DELETE"))
+                   for sql, _ in remote_server.executed)
+    assert all(points > 0 for points in labels.values())
 
-    if name == "full_scan_update_metadata_available":
-        assert labels == {"EXPLAIN indicates a full table scan": 10}
-        assert "M1_TABLE_ROWS_FULL_SCAN_WRITE" in metadata_codes
-        assert statement["metadata_score_adjustment"] >= 5 and statement["metadata_status"] == "available"
-        assert statement["score"] == statement["static_score"] + 10 + statement["metadata_score_adjustment"]
-    elif name == "full_scan_update_metadata_unavailable":
-        assert labels == {"EXPLAIN indicates a full table scan": 10}
-        assert statement["metadata_status"] != "available" and statement["metadata_score_adjustment"] == 0
-        assert statement["score"] == statement["static_score"] + 10
-    elif name == "high_estimated_rows_delete":
-        assert labels == {"EXPLAIN estimated rows are high": 10}
-        assert statement["high_estimated_rows_applied"] is True
-    elif name == "indexed_selective_update":
-        assert labels == {"EXPLAIN confirms selective indexed access": -3}
-        assert statement["score"] == statement["static_score"] - 3
+    if name == "write_with_metadata_no_plan":
+        assert statement["evidence"]["plan"] == {"state": "not_collected_read_only",
+                                                 "reason": "plan_not_collected_read_only"}
+        assert statement["evidence"]["metadata"]["state"] == "collected"
+        assert labels == {} and statement["metadata_factors"] == []
+        assert statement["score"] == statement["static_score"] == 20
+        assert statement["scope"]["basis"] == "not_established" and statement["confidence"] == "LIMITED"
+        assert remote.json()["analysis_mode"] == "STATIC_DATABASE_METADATA"
+    elif name == "write_metadata_unavailable":
+        assert statement["evidence"]["metadata"]["state"] == "failed"
+        assert statement["evidence"]["overall"] == "unavailable"
+        assert statement["score"] == statement["static_score"]
+        assert statement["scope"]["basis"] == "not_established" and statement["confidence"] == "LIMITED"
+    elif name == "range_delete_no_plan":
+        assert labels == {} and statement["high_estimated_rows_applied"] is False
+        assert statement["scope"]["basis"] == "not_established"
+    elif name == "verified_primary_key_update":
+        assert statement["scope"] == {
+            "basis": "at_most_one_row", "source": "table_metadata", "table": "appdb.users",
+            "index": "PRIMARY", "columns": ["id"],
+            "factor": {"label": "Unique key PRIMARY limits the match to at most one row", "points": 0,
+                       "medium_floor_applied": True},
+            "indirect_effects": "not_checked"}
+        # Same one-row write floor as local validation.
+        assert statement["static_score"] == 20 and statement["score"] == 20
+        assert statement["risk_level"] == "MEDIUM" and statement["confidence"] == "HIGH"
+        assert statement["static_confidence"] == "LIMITED"
+    elif name == "non_unique_key_update":
+        assert statement["scope"]["basis"] == "not_established"
+        assert statement["score"] == statement["static_score"] == 20
+        assert statement["confidence"] == "LIMITED"
     elif name == "select":
         assert labels == {} and statement["score"] == statement["static_score"]
-        # Evidence lives in the evidence state; confidence keeps its static meaning.
         assert statement["confidence"] == "HIGH"
-        assert statement["evidence"]["plan"]["state"] == "collected"
+        assert statement["evidence"]["plan"] == {"state": "collected", "reason": None,
+                                                 "rows": 1, "interpreted": True}
+        assert statement["scope"]["basis"] == "not_applicable"
+        assert remote.json()["analysis_mode"] == "DATABASE_EVIDENCE"
     elif name == "critical_delete_no_reduction":
-        assert statement["static_risk_level"] == "CRITICAL"
-        assert labels == {} and statement["score"] == statement["static_score"]
+        assert statement["static_risk_level"] == "CRITICAL" and statement["score"] == 100
+        assert statement["scope"]["basis"] == "all_rows" and statement["confidence"] == "HIGH"
     elif name == "unrestricted_update_no_reduction":
-        assert statement["score"] >= statement["static_score"]
-        assert "EXPLAIN confirms selective indexed access" not in labels
-    elif name == "evidence_unavailable":
+        assert statement["score"] == statement["static_score"] == 100
+        assert statement["scope"]["basis"] == "all_rows"
+    elif name == "select_plan_failed":
         assert statement["database_evidence"]["available"] is False
         assert statement["database_evidence"]["error"] == "explain_failed"
-        assert labels == {} and statement["score"] == statement["static_score"]
         # The plan failed but metadata was collected: partial evidence, not "unavailable".
         assert statement["evidence"]["plan"] == {"state": "failed", "reason": "explain_failed"}
         assert statement["evidence"]["metadata"]["state"] == "collected"
@@ -251,12 +291,10 @@ def test_remote_validation_matches_local_evidence_scoring(monkeypatch, name):
         assert remote.json()["evidence_summary"]["partial"] is True
         assert remote.json()["analysis_mode"] == "STATIC_DATABASE_METADATA"
 
-    if name != "evidence_unavailable":
-        assert remote.json()["analysis_mode"] == "DATABASE_EVIDENCE"
-    assert statement["confidence"] in {"HIGH", "LIMITED", "LOW"}
     assert statement["evidence"]["connection"] == {"state": "connected", "reason": None}
     assert remote.json()["overall_score"] == statement["score"]
     assert remote.json()["overall_risk_level"] == statement["risk_level"]
+    assert remote.json()["overall_confidence"] == statement["confidence"]
 
 
 # ---------------------------------------------------------------- row shape
@@ -273,7 +311,7 @@ def test_connector_connection_uses_unbuffered_dictionary_rows():
 def test_dictionary_row_explain_and_metadata_are_populated(monkeypatch):
     server = FakeServer(explain=[explain_row("ALL", 500, extra="Using where")], table_rows=250_000,
                         indexes=[("PRIMARY", "id", 1, 0), ("idx_status", "status", 1, 1)])
-    response, _ = remote_validate(monkeypatch, server, "UPDATE users SET active = 0 WHERE status = 'old'")
+    response, _ = remote_validate(monkeypatch, server, "SELECT * FROM users WHERE status = 'old'")
     assert response.status_code == 200
     evidence = response.json()["statements"][0]["database_evidence"]
     assert evidence["available"] is True and evidence["access_type"] == "ALL"
@@ -288,7 +326,7 @@ def test_former_tuple_row_crash_no_longer_produces_500(monkeypatch):
     """With tuple rows the shared collector cannot parse EXPLAIN; that is now a
     collector failure (evidence unavailable), not an unhandled 500."""
     server = FakeServer(explain=[explain_row("ALL", 500)], tuple_rows=True)
-    response, _ = remote_validate(monkeypatch, server, "UPDATE users SET active = 0 WHERE id = 5", database=None)
+    response, _ = remote_validate(monkeypatch, server, "SELECT * FROM users WHERE id = 5", database=None)
     assert response.status_code == 200, response.text
     statement = response.json()["statements"][0]
     assert statement["database_evidence"]["available"] is False
@@ -304,7 +342,7 @@ def test_explain_collector_failure_keeps_static_result(monkeypatch):
         raise RuntimeError("collector exploded")
 
     monkeypatch.setattr(connector_server, "collect_statement_evidence", boom)
-    response, _ = remote_validate(monkeypatch, FakeServer(), "UPDATE users SET active = 0 WHERE id = 5")
+    response, _ = remote_validate(monkeypatch, FakeServer(), "UPDATE users SET active = 0 WHERE status = 'old'")
     assert response.status_code == 200, response.text
     body = response.json()
     statement = body["statements"][0]
@@ -322,11 +360,15 @@ def test_metadata_collector_failure_keeps_result_usable(monkeypatch):
 
     monkeypatch.setattr(connector_server, "collect_metadata", boom)
     server = FakeServer(explain=[explain_row("ALL", 500)], table_rows=250_000)
-    response, _ = remote_validate(monkeypatch, server, "UPDATE users SET active = 0 WHERE status = 'old'")
+    response, _ = remote_validate(monkeypatch, server, "SELECT * FROM users WHERE status = 'old'")
     assert response.status_code == 200, response.text
     statement = response.json()["statements"][0]
     assert statement["metadata_status"] == "unavailable" and statement["metadata_score_adjustment"] == 0
+    # The SELECT's plan (full scan, 500 rows) is scored: +10 for the full scan only.
     assert statement["evidence_factors"] == [{"label": "EXPLAIN indicates a full table scan", "points": 10}]
+    assert statement["score"] == statement["static_score"] + 10
+    assert statement["evidence"]["plan"]["state"] == "collected"
+    assert statement["evidence"]["overall"] == "partial"
     assert response.json()["analysis_mode"] == "DATABASE_EVIDENCE"
 
 
@@ -351,6 +393,24 @@ def test_connection_and_request_failures_remain_real_http_errors(monkeypatch):
     client2, headers2 = paired_client(runtime2)
     limited = client2.post("/company/targets/t1/validate", headers=headers2, json={"sql": too_many, **login()})
     assert limited.status_code == 400 and limited.json()["error_code"] == "statement_limit_exceeded"
+
+
+@pytest.mark.parametrize("sql, code", [
+    ("-- only a comment", "no_statements"),
+    ("DELIMITER //\nCREATE PROCEDURE p() BEGIN DELETE FROM t; END //\nDELIMITER ;", "delimiter_not_supported"),
+    ("SELECT 1; CREATE PROCEDURE p() BEGIN DELETE FROM t; END", "stored_program_not_supported"),
+])
+def test_remote_scripts_without_assessable_statements_are_refused(monkeypatch, sql, code):
+    # Same batch contract as local /api/validate, as the connector's 400 error shape;
+    # never a LOW-risk result. Nothing is explained on the target.
+    server = FakeServer()
+    runtime, _ = remote_runtime(monkeypatch, server)
+    client, headers = paired_client(runtime)
+    refused = client.post("/company/targets/t1/validate", headers=headers, json={"sql": sql, **login()})
+    assert refused.status_code == 400 and refused.json()["error_code"] == code
+    assert "statements" not in refused.json()
+    assert not any("EXPLAIN" in str(sql).upper() or "INFORMATION_SCHEMA" in str(sql).upper()
+                   for sql in server.executed)
 
 
 # ---------------------------------------------------------------- remote database selection

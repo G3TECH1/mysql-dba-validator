@@ -25,10 +25,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 from backend.analyzer import analyze_batch
-from backend.db import validate_database_identifier
+from backend.db import enforce_read_only_session, validate_database_identifier
 from backend.db_evidence import (
     PLAN_NOT_ELIGIBLE,
     DatabaseEvidence,
+    ReadOnlySessionLost,
     collect_statement_evidence,
     select_not_eligible_for_plan,
 )
@@ -500,6 +501,26 @@ class ConnectorRuntime:
 
         return f"EXPLAIN {statement};"
 
+    @staticmethod
+    def require_read_only_session(connection: Any):
+        """Return the connection as a confirmed read-only session, or close it and fail.
+
+        Every company evidence connection goes through this: MySQL must report
+        @@SESSION.transaction_read_only = 1 after SET SESSION TRANSACTION READ ONLY.
+        The validator never needs, and never relies on, write privileges.
+        """
+        try:
+            read_only = enforce_read_only_session(connection)
+        except Exception:
+            read_only = None
+        if read_only is None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+            raise ValueError("database_connection_failed")
+        return read_only
+
     def execute_bounded_explain_statement(
         self,
         *,
@@ -514,6 +535,10 @@ class ConnectorRuntime:
     ) -> dict[str, Any]:
         if operation not in D2_EXPLAIN_OPERATIONS:
             raise ValueError("unsupported_evidence_operation")
+        if operation != "EXPLAIN_SELECT":
+            # EXPLAIN UPDATE/DELETE needs a writable session and write privileges; the
+            # company connection is read-only, so a write plan is never requested.
+            raise ValueError("plan_not_collected_read_only")
         if not isinstance(target_id, str) or not target_id.strip():
             raise ValueError("invalid_explain_statement")
 
@@ -547,6 +572,7 @@ class ConnectorRuntime:
                 tls_hostname=target.tls_hostname or target.host,
                 tls_ca_path=self.company_tls_ca_path,
             )
+            connection = self.require_read_only_session(connection)
             cursor = None
             try:
                 cursor = connection.cursor()
@@ -1152,7 +1178,7 @@ class ConnectorRuntime:
                 ssl=ssl_config,
             )
             connection.connect(sock=sock)
-            return connection
+            return self.require_read_only_session(connection)
         except (pymysql.MySQLError, TimeoutError, OSError, ValueError) as exc:
             if connection is not None:
                 try:
@@ -1834,35 +1860,56 @@ def create_app(*, runtime: ConnectorRuntime | None = None) -> FastAPI:
                 tls_hostname=target.tls_hostname or target.host,
                 tls_ca_path=runtime.company_tls_ca_path,
             )
+            connection = runtime.require_read_only_session(connection)
 
             sql_text = payload.sql.strip()
             if not sql_text:
                 raise ValueError("invalid_sql")
 
-            from backend.evidence_state import CONNECTED
-            from backend.main import batch_result, build_statement_result
+            from backend.evidence_state import CONNECTED, connection_failed
+            from backend.main import batch_result, build_statement_result, script_error
             all_facts = parse_sql(sql_text)
-            if len(all_facts) > 16:
+            # Comment-only SQL, DELIMITER scripts, stored programs mixed with other
+            # statements, and more than 16 statements are refused as a whole (400).
+            error = script_error(sql_text, all_facts)
+            if error is not None:
                 raise HTTPException(status_code=400, detail=_safe_json_error(
-                    "statement_limit_exceeded", status_code=400, error_code="statement_limit_exceeded"))
+                    error, status_code=400, error_code=error))
 
             analyses = analyze_batch(all_facts)
             reports = [score_statement(analysis, batch_size=len(
                 analyses)) for analysis in analyses]
             statements = []
 
+            statement_connection_state = CONNECTED
             for report, analysis in zip(reports, analyses):
+                if connection is None:
+                    # The read-only session was lost on an earlier statement and the
+                    # connection closed: static analysis only from here on.
+                    statements.append(build_statement_result(
+                        report, analysis, DatabaseEvidence(available=False, error="collection_failed"),
+                        None, statement_connection_state))
+                    continue
                 # Evidence collection on the already-validated connection. A collector
                 # failure degrades to "evidence unavailable" (same as local); it never
                 # turns a usable static result into a 500.
                 try:
                     if select_not_eligible_for_plan(report.facts):
-                        # Same SELECT eligibility rule as local: a lossy parse (for
-                        # example a trailing SELECT ... INTO) gets no plan request.
+                        # Same SELECT eligibility rule as local (the collector applies
+                        # it too): a lossy parse or an unreviewed function call gets no
+                        # plan request.
                         evidence = DatabaseEvidence(available=False, error=PLAN_NOT_ELIGIBLE)
                     else:
                         evidence = collect_statement_evidence(
-                            report.facts.raw_sql, connection=connection)
+                            report.facts.raw_sql, connection=connection, source_facts=report.facts)
+                except ReadOnlySessionLost:
+                    # The collector closed the connection; nothing more is sent on it.
+                    connection = None
+                    statements.append(build_statement_result(
+                        report, analysis, DatabaseEvidence(available=False, error="collection_failed"),
+                        None, CONNECTED))
+                    statement_connection_state = connection_failed("collection_failed")
+                    continue
                 except Exception:
                     evidence = DatabaseEvidence(available=False, error="collection_failed")
                 if payload.database is None:
@@ -1969,7 +2016,7 @@ def create_app(*, runtime: ConnectorRuntime | None = None) -> FastAPI:
                 session_token=session_token)
         except ValueError as exc:
             code = str(exc)
-            if code in {"company_target_not_approved", "invalid_database", "invalid_table", "invalid_explain_statement", "unsupported_evidence_operation"}:
+            if code in {"company_target_not_approved", "invalid_database", "invalid_table", "invalid_explain_statement", "unsupported_evidence_operation", "plan_not_collected_read_only"}:
                 raise HTTPException(status_code=400, detail=_safe_json_error(
                     code, status_code=400, error_code=code)) from exc
             raise HTTPException(status_code=500, detail=_safe_json_error(

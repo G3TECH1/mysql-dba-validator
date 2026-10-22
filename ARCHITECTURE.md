@@ -106,10 +106,11 @@ and has no endpoint that runs user-supplied SQL (`/api/evidence` returns
 
 | | Local evidence (web app) | Remote evidence (connector) |
 | --- | --- | --- |
-| Connection | One per validation, login from the request, session set to read-only transactions | One per operation, login from the request, approved target only, pinned IP, verified TLS |
-| `SELECT` plan | `EXPLAIN` only when the exact outgoing text is one plain `SELECT` | `EXPLAIN` of the parser-regenerated `SELECT` |
-| `UPDATE` / `DELETE` plan | Never requested (`plan_not_collected_read_only`): MySQL refuses `EXPLAIN` of writes in a read-only transaction | `EXPLAIN` of the parser-regenerated statement |
-| `SELECT … INTO`, or a `SELECT` the parser could only read permissively | Not eligible (`plan_not_eligible`), nothing sent | Not eligible (`plan_not_eligible`), nothing sent |
+| Connection | One per validation, login from the request | One per operation, login from the request, approved target only, pinned IP, verified TLS |
+| Read-only session | `SET SESSION TRANSACTION READ ONLY`, then `SELECT @@SESSION.transaction_read_only` must return 1, or the connection is closed and no evidence is collected. Read back again on the same cursor before each plan request; if it is no longer 1, nothing is sent, the connection is closed and the rest of the batch gets no evidence | The same, for every company connection |
+| `SELECT` plan | `EXPLAIN` only when the exact outgoing text is one plain `SELECT` with no `INTO` and no locking clause, and every word before `(` in the submitted and the outgoing text is on the reviewed list of MySQL 8.4 built-ins and reserved syntax words (`PERMITTED_CALL_NAMES`); quoted and schema-qualified calls are refused | The same |
+| `UPDATE` / `DELETE` plan | Never requested (`plan_not_collected_read_only`) | Never requested (`plan_not_collected_read_only`) |
+| `SELECT … INTO`, a `SELECT` the parser could only read permissively, or one calling a name outside the reviewed list | Not eligible (`plan_not_eligible`), nothing sent; the collector checks this itself, not only its callers | The same |
 | Other statements | No plan | No plan |
 | Metadata | Fixed, parameterised `information_schema` queries for the referenced tables | The same queries, only for the selected discovered database |
 | Other | `SELECT DATABASE()` after a plan | `SELECT DATABASE()` after a plan; fixed, capped `SHOW DATABASES` for discovery |
@@ -121,9 +122,16 @@ connection, and discovery runs a capped `SHOW DATABASES`.
 
 MySQL account privileges are the authorization boundary: `EXPLAIN` needs the
 same privileges as the statement it explains. The application's restrictions
-are a safety layer on top of them. The read-only session on the local
-connection is defense in depth; the remote connection has no read-only
-session, because remote `UPDATE`/`DELETE` plans require one that is not.
+are a safety layer on top of them. `EXPLAIN` can evaluate functions while
+planning, so the function list is the first control; the read-only session is
+the second. A read-only transaction prohibits changes to tables (temporary
+tables excepted) but does not stop a function from sleeping or taking locks,
+and it is not a privilege. Neither control has been tested against a real
+server for stored-function behaviour. Because write plans are never requested,
+the evidence account never needs `UPDATE` or `DELETE`. Until v0.4.1 the company
+connection had no read-only session and requested `UPDATE`/`DELETE` plans;
+the main branch no longer does (see
+[docs/v2-database-evidence-contract.md](docs/v2-database-evidence-contract.md)).
 
 ## Risk scoring
 
@@ -137,14 +145,59 @@ session, because remote `UPDATE`/`DELETE` plans require one that is not.
   penalised by itself.
 - **MySQL transaction semantics.** Transaction advice is scoped to DML,
   because many MySQL DDL statements commit implicitly.
-- **Bounded `EXPLAIN` adjustments** (only when a plan was collected, only for
-  `UPDATE`/`DELETE`, never for a statement already `CRITICAL`):
+- **An always-true `WHERE` is no `WHERE`.** A predicate that is true for
+  every row by its structure (`WHERE 1`, `WHERE TRUE`, `WHERE 1 = 1`,
+  `WHERE id = 5 OR 1`, `NOT FALSE`) is decided from the parse tree, never
+  from text, and is scored, scoped and described exactly like a write with no
+  `WHERE`: `CRITICAL`, `all_rows`. Words and string literals such as
+  `'untrue'` are never read as Boolean constants. `WHERE id > 0` remains a
+  "broad" heuristic (+25) unless an `AND` narrows it.
+- **A `WHERE` clause is not evidence of a narrow write.** Every other
+  `UPDATE`/`DELETE` with a `WHERE` gets
+  +5 ("affected-row count cannot be established") and a `MEDIUM` floor.
+  Column names such as `id` or `*_id` and an `=` in the predicate earn no
+  reduction (v0.4.1 and earlier gave −5 for them).
+- **Row scope** (`scope.basis`): `all_rows` for a single-table write with no
+  partition selection, no `LIMIT`, and no `WHERE` or an always-true one (from
+  the SQL); `at_most_one_row` only when table
+  metadata confirms a primary key or unique index whose every column the
+  `WHERE` fixes, through top-level `AND` terms, to a non-NULL literal of a
+  compatible type, on a single-table write; `not_established` otherwise;
+  `not_applicable` for statements that do not change existing rows. A
+  verified `at_most_one_row` replaces the +5 and credits −5 (−10 in total): it
+  is the only rule that lowers a score. It is a bound, not a count: the row
+  may not exist. Every scope describes the target table's directly matched
+  rows only: triggers, foreign-key actions (`ON DELETE`/`ON UPDATE CASCADE`,
+  `SET NULL`) and other indirect effects are never inspected, and the result
+  says so (`scope.indirect_effects: not_checked`, the scope reason, the page's
+  scope line). A verified key therefore never makes the `v2_assessment` Data
+  Risk dimension `LOW`, and the −10 credit never takes the score below 20:
+  a verified one-row `UPDATE`/`DELETE` is at least `MEDIUM` overall, with
+  the reason "MEDIUM is the minimum overall risk…". The verified scope and
+  its `HIGH` confidence are still reported; `scope.factor.points` is the
+  change actually applied and `scope.factor.medium_floor_applied` says
+  whether the floor limited it.
+- **`EXPLAIN` / `DESCRIBE` of a change.** The validator never sends these to
+  MySQL; it scores what MySQL would do with the text. `EXPLAIN ANALYZE` runs
+  the explained statement to time it, so it is scored as that statement
+  (`EXPLAIN ANALYZE DELETE FROM t` is `CRITICAL`); when the explained
+  statement cannot be read it is `HIGH` with `LOW` confidence. Plain
+  `EXPLAIN`/`DESCRIBE` of an `UPDATE`, `DELETE`, `INSERT` or `REPLACE` plans
+  it without running it, but gets +5 and a `MEDIUM` level with a finding
+  that the text contains a data-changing statement. `statement_type` stays
+  `DESCRIBE`.
+- **Bounded `EXPLAIN` adjustments** (only for a collected one-row plan, for
+  `UPDATE`/`DELETE` and, on the main branch, for a `SELECT`; with `LIMIT`, the
+  row-estimate rule only when the plan shows `Using filesort` or `Using temporary`;
+  never for a statement already `CRITICAL`):
   - +10 when `EXPLAIN` indicates a full table scan;
-  - +10 when the optimizer estimates at least 10,000 rows;
-  - −3 for confirmed `const`/`eq_ref`/`ref` access with a key and no full
-    scan.
+  - +10 when the optimizer estimates at least 10,000 rows.
 
-  `estimated_rows` is an optimizer estimate, not an affected-row count.
+  No access type lowers a score (v0.4.1 and earlier gave −3 for
+  `const`/`eq_ref`/`ref`; `ref` is a non-unique lookup). `estimated_rows` is
+  an optimizer estimate of rows examined, not an affected-row count. Because
+  `UPDATE`/`DELETE` plans are not collected, in practice these adjustments
+  apply to `SELECT` plans only.
 - **Metadata adjustments**, each +5 and each requiring an `UPDATE`/`DELETE`
   with a `WHERE` clause, a collected plan showing a full table scan, available
   metadata, and a statement that is not already `CRITICAL`:
@@ -154,17 +207,24 @@ session, because remote `UPDATE`/`DELETE` plans require one that is not.
     than 10,000 rows for a large table).
   - **M2** — one table, a direct `column = literal` predicate on it, and
     index statistics showing no index whose leading column is that column.
+    On the main branch it also applies to a `SELECT`; the page calls it
+    "Filter and index assessment".
 
-  Both depend on a collected `UPDATE`/`DELETE` plan, so in practice they arise
-  only on the remote path.
+  M1 depends on a collected `UPDATE`/`DELETE` plan, which is not requested, so
+  in practice it does not arise.
 - **Missing evidence never lowers a score.** Every adjustment is a no-op
   without the evidence it needs, and `CRITICAL` is never reduced.
 - **Confidence is about the assessment, not the evidence.** `confidence` is
-  `HIGH`, `LIMITED` or `LOW` and comes from the SQL itself: `LIMITED` for
-  writes and `CALL`, whose impact depends on rows the validator cannot count,
-  and `LOW` when the SQL could not be parsed. Database evidence never raises
-  it: no evidence the validator collects gives the number of rows a statement
-  would affect.
+  `HIGH`, `LIMITED` or `LOW` and is independent of risk: a `DROP TABLE` is
+  `CRITICAL` with `HIGH` confidence. `HIGH` for DDL, DCL, transaction control,
+  `SELECT`, and writes whose row scope is established (`all_rows`, or
+  `at_most_one_row` from table metadata); `LIMITED` for other writes,
+  `INSERT`, `REPLACE` and `CALL`; `LOW` when the SQL could not be parsed or
+  could only be read partly (`analysis_text_differs`). A referenced table that
+  metadata did not find caps it at `LIMITED`. Missing or failed evidence never
+  raises it. Batch `overall_confidence` is the lowest statement confidence.
+  Computed in one place (`risk_engine.static_confidence`, capped in
+  `main.final_confidence`).
 
 ## Evidence model
 
@@ -175,7 +235,7 @@ everything else that talks about evidence is derived from it.
 | Field | Values |
 | --- | --- |
 | `connection.state` | `not_attempted`, `connected`, `failed` (with a `reason` such as `auth_failed` or `unreachable`) |
-| `plan.state` | `collected`, `not_collected_read_only` (local `UPDATE`/`DELETE`), `not_eligible` (a `SELECT` that is not one plain `SELECT`), `not_supported` (no plan for this statement), `failed`, `not_attempted` |
+| `plan.state` | `collected` (with `rows`, the number of `EXPLAIN` rows, and `interpreted`, true only for a one-row plan; a multi-row plan has `reason: multi_row_plan` and is shown, not scored), `not_collected_read_only` (every `UPDATE`/`DELETE`), `not_eligible` (a `SELECT` that is not one plain `SELECT`), `not_supported` (no plan for this statement), `failed`, `not_attempted` |
 | `metadata.state` | `collected` (with `tables: [{name, found}]`), `failed` (with a `reason` such as `timeout` or `permission_denied`), `not_applicable` (no table), `not_attempted` |
 | `overall` | `static_only`, `collected`, `partial` (some evidence collected, some failed), `unavailable` (nothing collected: the connection failed, or it succeeded but every requested evidence failed), `not_applicable` |
 
@@ -183,8 +243,9 @@ everything else that talks about evidence is derived from it.
 execution-plan rows and table rows are estimates, and `found: false` means
 `information_schema.TABLES` returned no row for that name in the schema it was
 looked up in (the selected database unless the SQL names another). The
-`tables` names are the parser's table references, so they can include names
-that are not tables.
+`tables` names are the parser's physical table references: aliases and CTE
+names are excluded (they were included in v0.4.1 and earlier). A table that
+exists only as a temporary table can still be reported as not found.
 
 The batch response's `evidence_summary` counts these states across all
 statements and sets `partial` when some evidence was collected and some
@@ -194,6 +255,18 @@ all evidence was; `STATIC_DATABASE_UNAVAILABLE`, shown as "Static + database
 evidence unavailable", does not by itself mean the connection failed
 (`connection.state` says that). Local and remote results use the same states
 with the same meaning; only how evidence is collected differs.
+
+Each statement result also carries (main branch, after v0.4.1):
+
+| Field | Meaning |
+| --- | --- |
+| `scope` | `{basis, source, table, index, columns, factor}`: what is established about the rows an `UPDATE`/`DELETE` matches (see Risk scoring). `source` is `sql` for `all_rows`, `table_metadata` for `at_most_one_row`, otherwise `null`; `factor` is the score credit, if any |
+| `confidence` / `static_confidence` | The final and the SQL-only confidence |
+| `analysis_text_differs` | `true` when the SQL could only be read partly: the analysed text may differ from the submitted text (confidence `LOW`) |
+| `v2_assessment` | Its `overall_score`, `risk_level` and `confidence` equal the statement's (they were placeholders, `0` / `UNKNOWN`, in v0.4.1 and earlier); its suggested checks are guidance, never SQL built from the submitted text |
+
+The batch adds `overall_confidence`, the lowest statement confidence (`null`
+for an empty batch).
 
 ## Credentials and stored data
 
