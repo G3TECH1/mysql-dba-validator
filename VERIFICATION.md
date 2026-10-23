@@ -26,11 +26,11 @@ than a recorded one.
 
 | Area | Status |
 | --- | --- |
-| Parser, risk engine, scoring adjustments, API, evidence contract, connector security rules | Automated tests at v0.5.0: 1313 passed, 4 skipped on the maintainer's Windows machine (Python 3.13.5) before tagging; in the v0.5.0 tag runs (Python 3.14), 1315 passed, 2 skipped on Windows and 1316 passed, 1 skipped on macOS. See [below](#v050-release-verification). For v0.5.1: in the tag runs (Python 3.14), 1346 passed, 2 skipped on Windows and 1347 passed, 1 skipped on macOS; see [v0.5.1 release verification](#v051-release-verification) and its [source commit](#v051-source-commit-comment-parsing-fix-c884f44) |
+| Parser, risk engine, scoring adjustments, API, evidence contract, connector security rules | Automated tests at v0.5.0: 1313 passed, 4 skipped on the maintainer's Windows machine (Python 3.13.5) before tagging; in the v0.5.0 tag runs (Python 3.14), 1315 passed, 2 skipped on Windows and 1316 passed, 1 skipped on macOS. See [below](#v050-release-verification). For v0.5.1: in the tag runs (Python 3.14), 1346 passed, 2 skipped on Windows and 1347 passed, 1 skipped on macOS; see [v0.5.1 release verification](#v051-release-verification) and its [source commit](#v051-source-commit-comment-parsing-fix-c884f44). For v0.6.0: in the tag runs (Python 3.14), 1546 passed, 2 skipped on Windows and 1547 passed, 1 skipped on macOS; see [v0.6.0 release verification](#v060-release-verification) |
 | Results page rendering of every evidence state | Real headless Chrome, driven by real API responses (part of the test suite) |
 | Local web app and connector together in a browser | Real headless Chrome, with company MySQL replaced by a stand-in |
-| Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip. The published v0.5.1 zip's checksum and smoke test were re-checked on the maintainer's machine; its artifact audit ran in CI only (below) |
-| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0 or v0.5.1. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
+| Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip. The published v0.6.0 zip's checksum was re-checked on the maintainer's machine; its smoke test and artifact audit ran in CI only (below) |
+| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0, v0.5.1 or v0.6.0. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
 | Remote/company workflow (local connector) end to end against a real MySQL server | **Reported by the maintainer** (manual test, recorded after the v0.4.1 release): successful on Windows against an AWS RDS for MySQL test database the maintainer created. No transcript or logs were provided for this record; see [below](#remote-workflow-against-aws-rds-for-mysql-maintainer-reported) |
 | Real company MySQL, VPN/LAN connectivity, company-issued TLS, hosted HTTPS frontend | **Not verified** |
 | Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan. In v0.4.1 only the remote connector path collected one; since v0.5.0 neither path does (see below), so M1 does not arise in practice. Automated tests only |
@@ -225,6 +225,41 @@ Not shown by these runs: a real-Mac acceptance pass (a CI run on a virtual Mac
 is not one, and the macOS zip is ad hoc signed only, not notarized), any live
 MySQL server (including T4b), MySQL 8.4, adding a target through the page in a
 browser, a signed build, and company infrastructure, VPN and TLS.
+
+## v0.6.0 release verification
+
+All from tag `v0.6.0` (tag object `e4c37312791116391fa4d44a3affefb913533760`),
+commit `a708ed54a6b35fbea63a6fbf25eb6d94a5011751`: the candidate `3b38133`
+([CI above](#v060-candidate-ci-on-3b38133-not-released)) plus the README and
+verification-record update. The sections headed "Unreleased" above describe
+the work released in v0.6.0. Published as
+[v0.6.0](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0)
+on 2026-10-23 at 21:05:03 UTC; GitHub reports it as published (not a draft or
+prerelease) and Latest. v0.5.1 is still published, with its tag and asset
+digests unchanged.
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Windows tag run ([40023050682](https://github.com/realspinn/mysql-dba-validator/actions/runs/40023050682)) | Tag matched `APP_VERSION`. Tests 1546 passed, 2 skipped (the log does not name the skipped tests); `pip check` passed; portable folder and zip built; artifact audit passed on both (119 files, 2184 embedded modules, 0 secret values checked); smoke test 55/55; draft release created | CI, Windows 2025, Python 3.14.9, PyMySQL 1.2.3 and sqlglot 30.24.0 for the tests |
+| macOS tag run ([40023050657](https://github.com/realspinn/mysql-dba-validator/actions/runs/40023050657)) | Tag matched `APP_VERSION`. Tests 1547 passed, 1 skipped (the Windows Job Object test, expected); skip check passed (0 unexpected); `pip check` passed; unsigned app and zip built; audits passed on both (112 files, 2220 embedded modules, 0 secret values checked); smoke test 49/49; `publish-unsigned` checked the zip's checksum and uploaded it to the draft. `sign-notarize`, `verify-signed` and `publish` were skipped | CI, GitHub-hosted Apple Silicon runner, macOS 15.7.9, Python 3.14.7, PyMySQL 1.2.3 and sqlglot 30.24.0 for the tests |
+| Published Windows zip | `MySQL-DBA-Validator-v0.6.0-windows-x64.zip`: 32,984,835 bytes, SHA256 `7f077ba982fbde49d1b0b18ae7c7cf54f0294ad4256af26e0be8ed8b71c18c41`; its `.sha256` file is 110 bytes. Downloaded from the draft: matches its `.sha256` file, GitHub's asset digest and the CI log. Not run outside CI: the smoke test needs ports 8420 and 8765, which a running test environment held | Maintainer's machine (checksums and file list only) |
+| Published macOS zip | `MySQL-DBA-Validator-v0.6.0-macos-arm64-unsigned.zip`: 33,695,827 bytes, SHA256 `9eca43facbb4e8567f42acdeab567ad18e057c623399e6b0a20911d6de865f5b`; its `.sha256` file is 118 bytes. Downloaded from the draft: matches its `.sha256` file, GitHub's asset digest and the CI log. Not run outside CI | Maintainer's machine (checksums and file list only) |
+| Contents of the built apps | File lists of both downloaded zips, read without extracting: no test files, keys, certificates, `.env` files, registries or caches. Static reading of the PyInstaller module archive in all four executables, without running them: each bundles `pymysql` with `VERSION_STRING` 1.2.3 (the release pin). The bundled sqlglot version was not read | Maintainer's machine |
+| Published release | After publication, all four assets have the same sizes and digests as the downloaded draft files | GitHub API |
+
+Not done for v0.6.0:
+
+- the smoke test and the artifact audit of the published zips on the
+  maintainer's machine (the CI smoke tests and audits passed);
+- a live test against a server that offers no TLS (T4b), MySQL 8.4, or real
+  company MySQL, VPN and company-issued TLS; the only live check is the
+  connector TLS test against one disposable local MySQL 8.0.45 server
+  ([above](#unreleased-release-candidate-checks));
+- adding a target through the page by hand in a browser, including its
+  failure cases;
+- a real-Mac acceptance pass: the macOS zip has been tested in CI only;
+- code signing: the Windows zip is unsigned, and the macOS app is ad hoc
+  signed only, not notarized.
 
 ## v0.5.1 release verification
 
