@@ -190,6 +190,42 @@ tree (the macOS CI result recorded for v0.5.1 applies to v0.5.1 only), a real
 Mac (including approval prompts in Terminal), MySQL 8.4, a packaged build, and
 company infrastructure, VPN and TLS.
 
+## v0.6.0 candidate: CI on `3b38133` (not released)
+
+Both release workflows were run by hand (`workflow_dispatch`) on 2026-10-23 on
+branch `release/v0.6.0-prep` at `3b38133cf191ba4d3d5924d43bb884331ce4a255`:
+`4efbaf1` (the work in the sections above) plus the version bump to 0.6.0.
+These are validation builds, not release builds: no tag, draft or release was
+created.
+
+| Check | Windows, run [40019920320](https://github.com/realspinn/mysql-dba-validator/actions/runs/40019920320) | macOS, run [40019926529](https://github.com/realspinn/mysql-dba-validator/actions/runs/40019926529) |
+| --- | --- | --- |
+| Runner, Python | Windows Server 2025 (`windows-2025-vs2026`, GitHub-hosted), Python 3.14.9, x64 | macOS 15.7.9 (`macos-15-arm64`, GitHub-hosted Apple Silicon), Python 3.14.7 |
+| Test environment (installed from `requirements.txt`) | PyMySQL 1.2.3, sqlglot 30.24.0, cryptography 45.0.7, pytest 9.1.1 | The same versions |
+| Test suite | 1546 passed, 2 skipped. The log does not name the skipped tests, and this job has no unexpected-skip check | 1547 passed, 1 skipped (the Windows Job Object test); skip check: 1548 tests, 1 skipped, 0 unexpected |
+| `pip check` | Passed | Passed |
+| Build and artifact audit | Portable build passed; audit passed on the folder and the zip: 119 files, 2184 embedded modules, 0 secret values checked | Unsigned app build passed (PyInstaller 6.22.3); audit passed on the app and the `ditto` zip: 112 files, 2220 embedded modules, 0 secret values checked, expected version 0.6.0 |
+| Smoke test (includes the packaged app reporting version 0.6.0) | 55/55 | 49/49 |
+| Artifact | `MySQL-DBA-Validator-v0.6.0-windows-x64.zip`, SHA256 `12aaf059489745e77ca8c1d8c4236e9b9dc7bd08193102e11cf6c0f77e4d6d56` (workflow artifact `windows-x64-portable`) | `MySQL-DBA-Validator-v0.6.0-macos-arm64-unsigned.zip`, SHA256 `b725966427b5be9c34f2612b1e750850d9c010b8231174728fd55b75d09bd8b6` (workflow artifact `macos-arm64-unsigned-3b38133…`) |
+| Release, signing, notarization, publishing | "Create draft GitHub Release" skipped | `publish-unsigned`, `sign-notarize`, `verify-signed` and `publish` skipped |
+
+Both zips were then downloaded to the maintainer's machine, and each matches
+its `.sha256` file and the CI log. Their file lists, read without extracting or
+running anything, contain no test files, certificates, keys, `.env` files,
+registries, caches or source documents. Both ship the new page (adding targets,
+the Windows-only certificate-store label, the per-target TLS message), and the
+Windows zip's `README.txt` has the new instructions. The apps are built from
+`release/requirements-build*.txt`, which pins PyMySQL 1.2.3. Reading the
+PyInstaller module archive inside all four executables (both `.exe` files and
+both macOS executables), without running them, confirmed it: each bundles the
+`pymysql` package with `VERSION_STRING` 1.2.3. The bundled sqlglot version was
+not read.
+
+Not shown by these runs: a real-Mac acceptance pass (a CI run on a virtual Mac
+is not one, and the macOS zip is ad hoc signed only, not notarized), any live
+MySQL server (including T4b), MySQL 8.4, adding a target through the page in a
+browser, a signed build, and company infrastructure, VPN and TLS.
+
 ## v0.5.1 release verification
 
 All from tag `v0.5.1`, commit `d8aef32fc5dc12648bbf576fbb579350e563f0fd`

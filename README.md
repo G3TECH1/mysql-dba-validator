@@ -14,7 +14,7 @@ Scoring is rule-based and deterministic; no AI or LLM makes risk decisions.
 The validator never runs the SQL you submit. It supports a DBA's judgement and
 does not guarantee that SQL is safe.
 
-**Current release: [v0.5.1](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.1)**
+**Current release: [v0.6.0](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0)**
 (pre-1.0), a portable Windows x64 app, plus an unsigned macOS (Apple Silicon)
 build.
 
@@ -75,11 +75,14 @@ database connected, so the result is static analysis only.*
   stored program definitions with a multi-statement body or mixed with other
   statements are refused rather than split unreliably. `CALL` never reports
   what a procedure does.
-- **No live MySQL validation of v0.5.0 or v0.5.1.** Their changes are covered
-  by automated tests only. On earlier code, local evidence was verified against a
-  real MySQL server, and the maintainer reported a successful test against an
-  AWS RDS for MySQL test database. Company MySQL, VPN/LAN and company-issued
-  TLS have never been verified.
+- **Little live MySQL validation since v0.5.0.** Changes since v0.5.0 are
+  covered by automated tests. The only live check is v0.6.0's connector TLS
+  behaviour (a trusted and an untrusted CA bundle, a host name not in the
+  certificate) against one disposable local MySQL 8.0.45 server; a server that
+  offers no TLS and MySQL 8.4 were not tested live. On earlier code, local
+  evidence was verified against a real MySQL server, and the maintainer
+  reported a successful test against an AWS RDS for MySQL test database.
+  Company MySQL, VPN/LAN and company-issued TLS have never been verified.
 - **Unsigned builds.** The Windows build is not code-signed. The macOS build
   is ad hoc signed only, not notarized, and has been tested only in CI, not on
   a real Mac.
@@ -93,13 +96,13 @@ Details: the
 ## Download and run
 
 Download from the
-[v0.5.1 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.1).
+[v0.6.0 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0).
 Each file has a matching `.sha256` checksum file there.
 
 | Platform | File | Status |
 | --- | --- | --- |
-| Windows x64 | `MySQL-DBA-Validator-v0.5.1-windows-x64.zip` | Built, audited and smoke-tested in CI; the release notes say which checks the maintainer repeated on the published zip |
-| macOS, Apple Silicon only | `MySQL-DBA-Validator-v0.5.1-macos-arm64-unsigned.zip` | Built, audited and smoke-tested in CI only; ad hoc signed, not notarized |
+| Windows x64 | `MySQL-DBA-Validator-v0.6.0-windows-x64.zip` | Built, audited and smoke-tested in CI; the release notes say which checks the maintainer repeated on the published zip |
+| macOS, Apple Silicon only | `MySQL-DBA-Validator-v0.6.0-macos-arm64-unsigned.zip` | Built, audited and smoke-tested in CI only; ad hoc signed, not notarized |
 
 **Windows**
 
@@ -107,7 +110,7 @@ Each file has a matching `.sha256` checksum file there.
    `.sha256` file:
 
    ```powershell
-   Get-FileHash .\MySQL-DBA-Validator-v0.5.1-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\MySQL-DBA-Validator-v0.6.0-windows-x64.zip -Algorithm SHA256
    ```
 
 2. Extract the zip anywhere, for example `C:\Tools\`. No installer or Python
@@ -125,10 +128,10 @@ covers local evidence, company targets and troubleshooting.
 **macOS (Apple Silicon)**
 
 Check the download with
-`shasum -a 256 -c MySQL-DBA-Validator-v0.5.1-macos-arm64-unsigned.zip.sha256`,
+`shasum -a 256 -c MySQL-DBA-Validator-v0.6.0-macos-arm64-unsigned.zip.sha256`,
 unzip it, and move `MySQL DBA Validator.app` to Applications. macOS blocks the
 first launch because the app is not notarized; the
-[release notes](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.5.1)
+[release notes](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0)
 explain how to open it.
 
 ## How it works
