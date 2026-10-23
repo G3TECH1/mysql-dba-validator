@@ -72,9 +72,10 @@ stay on the user's machine, under an operator's explicit approval, instead of
 passing through a web API.
 
 1. An operator starts `MySQL-DBA-Validator Console.exe` (or
-   `python -m connector`) and registers and approves targets by typing
-   commands in its console. Approval snapshots the host's DNS identity.
-   Browser sessions cannot register, approve, revoke or delete targets. The
+   `python -m connector`). Targets are registered and approved by typing
+   commands in its console, or requested from the page and approved with a
+   code shown in that console (step 3). Approval snapshots the host's DNS
+   identity. Browser sessions cannot approve, revoke or delete targets. The
    connector's target-management HTTP routes require an operator-scoped
    session, and the packaged launcher issues only browser-scoped pairing
    sessions, so in the packaged app target management is done in the
@@ -82,14 +83,23 @@ passing through a web API.
 2. The page pairs with the connector using a single-use, five-minute code
    printed in that console. The resulting browser session lives in memory and
    may call only a fixed list of routes.
-3. The page lists approved targets and refers to one by `target_id`. It cannot
-   supply a host, port, IP or TLS setting.
+3. The page lists approved targets and refers to one by `target_id`; it cannot
+   supply a host, port, IP or TLS setting for an operation. It may *request* a
+   new target: a name, DNS host name, port and trust choice, plus an optional
+   public CA bundle (no login, no SQL, no IP literal). The request opens no
+   connection: the connector resolves the name and prints the request, its
+   addresses and a one-time code in its console. Only that code, entered in
+   the same paired session within five minutes, approves it, and only if the
+   name still resolves to the addresses shown.
 4. Database discovery and validation each send the user's MySQL login in the
    request body. For every connection the connector re-resolves the target,
    requires the address set to match the approved snapshot, connects to the
-   validated IP, and requires TLS verified against the configured CA (with
-   hostname checking). Without a CA, company operations fail before any TCP
-   connection is opened.
+   validated IP, and requires TLS with certificate and host-name verification
+   against that target's trust source: the configured CA (`--tls-ca`), its
+   uploaded CA bundle (checked by SHA-256 on every connection), or the Windows
+   certificate store (Windows only; refused elsewhere). A missing, changed or
+   unknown trust source fails the operation before any TCP connection is
+   opened. There is no fallback to another trust source or to plaintext.
 5. A discovered database list is stored per target and browser session, bound
    to a keyed fingerprint of the MySQL username. Validation against a database
    requires it to be in that list. This binding is not authorization: MySQL

@@ -24,11 +24,23 @@ How the components and request flows fit together is described in
   bind to loopback only.
 - Company MySQL credentials are supplied per request, used for that operation
   and not persisted. There is no credential store.
-- The browser can use only connector targets that an operator approved in the
-  connector console. It cannot supply an arbitrary remote host.
+- The browser can use only connector targets approved at the connector
+  console. The page may request a target, but the request is approved only
+  with a one-time code that the console prints next to the exact host, port,
+  resolved addresses and TLS trust (single use, 5 minutes, bound to the paired
+  session, cancelled after three wrong codes). A request opens no connection,
+  and changed DNS answers are never approved automatically. The code shows
+  that someone at the console relayed it; it cannot show that they read the
+  request.
 - Each company connection re-validates the approved DNS identity and requires
-  TLS verified against a configured CA. Without a CA, company operations are
-  refused.
+  TLS verified against the target's trust source: the configured CA, an
+  uploaded CA bundle checked by SHA-256 on every connection, or the Windows
+  certificate store. A missing, changed or unknown trust source refuses the
+  connection; there is no fallback. Python's `VERIFY_X509_STRICT` flag is off,
+  as PyMySQL set it before; chain and host-name verification always apply.
+- Host names must be ASCII (no look-alike Unicode names) and console output
+  escapes every value, so a page-supplied name cannot rewrite the approval
+  display. The connector's HTTP access log is off.
 - Browser sessions require a single-use pairing code shown only in the
   connector console. Sessions are held in memory and cannot manage targets.
 - Evidence queries are fixed or bounded: `SELECT 1`, `EXPLAIN` and fixed
@@ -86,6 +98,9 @@ How the components and request flows fit together is described in
 
 - End-to-end use against real company infrastructure has not been verified.
   That includes a hosted HTTPS frontend, company MySQL, VPN/LAN and company TLS.
+- Software running as the same Windows user can read the connector console
+  and change the target registry and trust files. Target approval from the
+  page does not protect against that.
 - There is no user authentication. The tool is for a single user on their own
   machine, or a trusted self-hosted setup. It is not an internet-facing
   service.

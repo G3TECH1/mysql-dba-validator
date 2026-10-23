@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,6 +10,56 @@ TARGET_MODE_LOCAL = "LOCAL"
 
 _TARGET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _IPV4_LITERAL_RE = re.compile(r"^\d+(?:\.\d+){3}$")
+# One ASCII label: letters, digits, '_' (kept for existing internal names) and inner '-'.
+_HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$")
+MAX_HOSTNAME_LENGTH = 253
+MAX_DISPLAY_NAME_LENGTH = 64
+# Control, format (including bidirectional overrides), surrogate, private-use,
+# unassigned and line/paragraph separator characters are never accepted in a name.
+_UNSAFE_NAME_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+
+# Per-target TLS trust (stored in CompanyTarget.tls_policy). None means "configured".
+TLS_POLICY_CONFIGURED = "configured"
+TLS_POLICY_SYSTEM = "system"
+_TLS_POLICY_BUNDLE_RE = re.compile(r"^bundle:([0-9a-f]{64})$")
+
+
+def parse_tls_policy(value: Any) -> tuple[str, str | None]:
+    """Return (kind, bundle_sha256). Anything unrecognised raises: never a fallback."""
+    if value is None or value == TLS_POLICY_CONFIGURED:
+        return TLS_POLICY_CONFIGURED, None
+    if value == TLS_POLICY_SYSTEM:
+        return TLS_POLICY_SYSTEM, None
+    match = _TLS_POLICY_BUNDLE_RE.fullmatch(value) if isinstance(value, str) else None
+    if match:
+        return "bundle", match.group(1)
+    raise ValueError("unknown_tls_policy")
+
+
+def validate_display_name(value: Any) -> str:
+    """A display name the page may submit: 1-64 characters, nothing that can change
+    how a terminal renders text."""
+    if not isinstance(value, str):
+        raise ValueError("invalid_company_target_name")
+    name = value.strip()
+    if (not name or len(name) > MAX_DISPLAY_NAME_LENGTH
+            or any(unicodedata.category(ch) in _UNSAFE_NAME_CATEGORIES for ch in name)):
+        raise ValueError("invalid_company_target_name")
+    return name
+
+
+def console_text(value: Any) -> str:
+    """Printable ASCII as is; every other character (newlines, escape sequences,
+    non-ASCII) as a visible backslash escape, so text cannot alter a terminal display."""
+    out = []
+    for ch in str(value):
+        if ch == "\\":
+            out.append("\\\\")
+        elif " " <= ch <= "~":
+            out.append(ch)
+        else:
+            out.append(ch.encode("unicode_escape").decode("ascii"))
+    return "".join(out)
 
 
 @dataclass
@@ -100,14 +151,16 @@ def validate_company_target(target: CompanyTarget | dict[str, Any]) -> CompanyTa
         # This stage does not permit raw IP literals or other network-qualified values.
         # Hostnames are the policy object syntax we accept for explicit company targets.
         raise ValueError("invalid_company_target_host")
-    if not host.replace("-", "").replace(".", "").replace("_", "").isalnum():
+    # ASCII only: a non-ASCII name can look identical to another host on screen
+    # (IDNs are entered in their xn-- form). No trailing dot, no empty labels.
+    if not host.isascii() or len(host) > MAX_HOSTNAME_LENGTH:
         raise ValueError("invalid_company_target_host")
     labels = host.split(".")
-    if not labels or any(not label or len(label) > 63 for label in labels):
+    if any(not _HOST_LABEL_RE.fullmatch(label) for label in labels):
         raise ValueError("invalid_company_target_host")
-    if host.startswith(".") or host.endswith("."):
-        raise ValueError("invalid_company_target_host")
-    if any(label.startswith("-") or label.endswith("-") for label in labels):
+    # The last label must start with a letter: this refuses numeric forms such as
+    # "10.1" or "2130706433" that resolvers read as IP addresses.
+    if not labels[-1][0].isalpha():
         raise ValueError("invalid_company_target_host")
 
     if not isinstance(target.port, int) or not (1 <= target.port <= 65535):

@@ -429,3 +429,135 @@ def test_default_local_page_request_is_accepted_by_api():
     data = response.json()
     assert isinstance(data.get("statements"), list)
     assert data["statement_count"] == 1
+
+
+# ---------------------------------------------------------------- connection errors and session expiry
+
+
+def _connector_messages(served_html):
+    block = served_html[served_html.index("const CONNECTOR_ERROR_MESSAGES = {"):]
+    return block[:block.index("};")]
+
+
+def test_every_company_connection_code_has_a_fixed_message(served_html):
+    from connector.server import COMPANY_CONNECTION_ERROR_CODES, COMPANY_CONNECTION_FAILED
+
+    block = _connector_messages(served_html)
+    keys = set(re.findall(r"\n\t+(\w+): ", block))
+    assert COMPANY_CONNECTION_ERROR_CODES | {COMPANY_CONNECTION_FAILED} <= keys
+    for code in COMPANY_CONNECTION_ERROR_CODES | {COMPANY_CONNECTION_FAILED}:
+        line = next(line.strip() for line in block.splitlines() if line.strip().startswith(code + ": "))
+        # A fixed string literal: nothing from the response is interpolated.
+        assert re.fullmatch(r"\w+: '(?:[^'\\]|\\')+',?", line), line
+    # The page never shows a raw code for these: unknown codes fall back to the message.
+    assert "CONNECTOR_ERROR_MESSAGES[error.errorCode]" in _function_body(served_html, "connectorRequest")
+
+
+def test_session_expiry_notice_uses_the_connector_expiry_and_never_renews(served_html):
+    pair = _function_body(served_html, "pairConnector")
+    assert "scheduleSessionExpiryNotice(data.expires_in_seconds);" in pair
+    assert pair.index("setPaired(data.session_token") < pair.index("scheduleSessionExpiryNotice(")
+    notice = _function_body(served_html, "scheduleSessionExpiryNotice")
+    assert "Number(expiresInSeconds)" in notice and "setTimeout(" in notice
+    assert "setPaired(null, CONNECTOR_ERROR_MESSAGES.session_expired, 'error')" in notice
+    # No request, re-pairing or renewal from the timer.
+    for forbidden in ("connectorRequest", "fetch", "/pair", "pairConnector", "setInterval"):
+        assert forbidden not in notice, forbidden
+    # Timers belong to one session: cleared whenever the session changes.
+    paired = _function_body(served_html, "setPaired")
+    assert "state.sessionTimers.forEach(clearTimeout);" in paired
+    assert "PAIR_AGAIN_GUIDANCE" in _connector_messages(served_html).split("session_expired: ")[1].splitlines()[0]
+
+
+def test_only_the_target_id_is_remembered_across_re_pairing(served_html):
+    assignments = re.findall(r"state\.rememberedTargetId = ([^;}\n]+?)\s*[;}\n]", served_html)
+    assert assignments and set(assignments) <= {"null", "state.remoteTarget.target_id"}
+    paired = _function_body(served_html, "setPaired")
+    # Remembered before the existing clearing branch, which still runs unchanged.
+    assert paired.index("state.rememberedTargetId = state.remoteTarget.target_id") < paired.index(
+        "if (state.remoteTarget) selectTarget('');")
+
+
+def test_remembered_target_is_restored_only_from_the_fresh_approved_list(served_html):
+    load = _function_body(served_html, "loadApprovedTargets")
+    restore = load[load.index("else if (state.rememberedTargetId) {"):]
+    assert "state.rememberedTargetId = null;" in restore  # used once
+    guard = "if (state.approvedTargets.some(t => t.target_id === remembered)) selectTarget(remembered);"
+    assert guard in restore
+    assert load.index("state.approvedTargets = (data") < load.index(guard)
+    # selectTarget clears discovered databases: the new session must discover again.
+    assert "clearDiscoveredDatabases();" in _function_body(served_html, "selectTarget")
+
+
+def test_target_request_goes_only_to_the_connector_without_a_login(served_html):
+    request = _function_body(served_html, "requestTarget")
+    assert "connectorRequest(CONNECTOR_URL + '/company/target-requests'" in request
+    for forbidden in ("username", "password", "state.credentials", "/api/", "requestJson", "localStorage"):
+        assert forbidden not in request, forbidden
+    # Only the fields the connector accepts; the CA file is read into the body, not kept.
+    assert "display_name:" in request and "host:" in request and "port:" in request and "trust:" in request
+    assert "body.ca_pem = await file.text();" in request
+    assert "state.targetRequest = { requestId: data.request_id, sessionToken: sessionToken };" in request
+
+
+def test_approval_code_is_sent_in_the_body_of_the_same_session_only(served_html):
+    confirm = _function_body(served_html, "confirmTarget")
+    assert "connectorRequest(CONNECTOR_URL + '/company/target-requests/confirm'" in confirm
+    assert "JSON.stringify({ request_id: pending.requestId, approval_code: code })" in confirm
+    assert "pending.sessionToken !== state.connectorSessionToken" in confirm
+    assert "approvalCode.value = '';" in confirm  # cleared from the field at once
+    assert "?" not in confirm.split("'/company/target-requests/confirm'")[0].rsplit("CONNECTOR_URL", 1)[-1]
+    # The page never approves by itself: approval is only the explicit button.
+    assert served_html.count("confirmTarget(") == 1  # defined, never called by the page itself
+    assert "confirmTargetBtn.addEventListener('click', confirmTarget);" in served_html
+
+
+def test_local_login_is_cleared_when_a_newly_approved_target_is_selected(served_html):
+    """A login typed in Local mode must not be carried into the remote target that
+    is selected automatically after approval (it would be sent on Discover)."""
+    confirm = _function_body(served_html, "confirmTarget")
+    guard = "if (!state.remoteTarget) {"
+    branch = confirm[confirm.index(guard) + len(guard):]
+    branch = branch[:branch.index("}")]
+    assert "username.value = '';" in branch and "password.value = '';" in branch
+    # Cleared before the selection, which re-reads the form (syncCredentials).
+    assert confirm.index(guard) < confirm.index("selectTarget(approvedId);")
+    assert "syncCredentials();" in _function_body(served_html, "selectTarget")
+
+
+def test_session_change_drops_the_open_request_and_reapproval_is_explicit(served_html):
+    paired = _function_body(served_html, "setPaired")
+    assert "showTargetRequest(false);" in paired and "addTarget.hidden = !state.connectorSessionToken;" in paired
+    show = _function_body(served_html, "showTargetRequest")
+    assert "state.targetRequest = null;" in show and "approvalCode.value = '';" in show
+    request = _function_body(served_html, "connectorRequest")
+    assert "REAPPROVAL_CODES.includes(error.errorCode)) reapproveBtn.hidden = false;" in request
+    assert "requestTarget(state.remoteTarget.target_id)" in served_html  # only from the button
+    assert "reapproveBtn.hidden = true;" in _function_body(served_html, "selectTarget")
+
+
+def test_every_onboarding_code_has_a_fixed_message(served_html):
+    block = _connector_messages(served_html)
+    keys = set(re.findall(r"\n\t+(\w+): ", block))
+    codes = {
+        "approval_console_unavailable", "invalid_target_request", "invalid_company_target_name",
+        "invalid_company_target_host", "invalid_company_target_port", "local_target_not_allowed_in_company_mode",
+        "company_target_exists", "company_dns_validation_failed", "company_target_address_not_allowed",
+        "tls_ca_not_configured", "trust_policy_unsupported", "trust_store_unavailable", "trust_storage_unavailable",
+        "invalid_trust_policy", "invalid_ca_bundle", "ca_bundle_too_large", "ca_bundle_contains_private_key",
+        "ca_bundle_has_no_ca_certificate", "target_request_limit_reached", "company_target_not_reapprovable",
+        "trust_policy_unavailable", "approval_rate_limited", "target_request_not_found", "approval_code_invalid",
+        "target_request_cancelled", "dns_changed_since_request", "trust_bundle_unavailable",
+        "company_target_changed", "invalid_target_confirmation", "target_registry_unavailable",
+        "unknown_company_target",
+    }
+    assert codes <= keys, codes - keys
+
+
+def test_unpair_and_local_mode_forget_the_remembered_target(served_html):
+    unpair = _function_body(served_html, "unpairConnector")
+    assert unpair.index("setPaired(null,") < unpair.index("state.rememberedTargetId = null;")
+    assert ("targetSelect.addEventListener('change', () => { forgetRememberedTarget(); "
+            "selectTarget(targetSelect.value); });") in served_html
+    assert "if (!state.remoteTarget) forgetRememberedTarget();" in served_html
+    assert "state.rememberedTargetId = null" in _function_body(served_html, "forgetRememberedTarget")

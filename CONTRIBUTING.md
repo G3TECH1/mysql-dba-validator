@@ -29,15 +29,21 @@ guide needs fixing.
 
 ## Development setup
 
-The project is developed and tested on Windows with Python 3.14. Other
-platforms may work but are not tested. All commands are PowerShell, run from
-the repository root.
+The project is developed and tested by hand on Windows with Python 3.14. The
+release workflows also run the full test suite on GitHub-hosted Windows and
+macOS (Apple Silicon) runners, for version tags or when started by hand. A
+passing macOS run is not a manual acceptance test on a real Mac; that has not
+been done yet (see VERIFICATION.md). The commands below are PowerShell, run
+from the repository root.
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
+
+On macOS or Linux (bash or zsh), activate with `source .venv/bin/activate`
+instead; in Windows `cmd.exe`, use `.venv\Scripts\activate.bat`.
 
 `requirements.txt` includes the test dependencies. Run the web app and, if you
 are working on the remote/company workflow, the connector in a second terminal:
@@ -103,7 +109,7 @@ from a short, fixed list. That is a design decision, not a missing feature.
   keyboard focus, contrast and wording, as long as they do not change what is
   sent, where it is sent or what is stored.
 - Readable messages for error codes the page shows raw. For example,
-  `database_connection_failed` from the connector has no entry in
+  `database_validation_failed` from the connector has no entry in
   `CONNECTOR_ERROR_MESSAGES`.
 
 ### Intermediate contributions

@@ -11,18 +11,23 @@ Security model
 * The browser obtains a session only by exchanging a single-use, short-lived
   pairing code that this process prints to the operator's terminal. No HTTP route
   issues pairing codes, and codes are never written to logs, URLs, or files.
-* Codes issued here create *browser-scoped* sessions, which can only use targets
-  that are already approved; they cannot register, approve, or delete targets.
+* Codes issued here create *browser-scoped* sessions, which can use approved
+  targets and can *request* a new target (or re-approval). A request is approved
+  only with a one-time code printed here next to the exact host, port, resolved
+  addresses and TLS trust; it is never approved automatically. Browser sessions
+  cannot delete or revoke targets.
 * Approved targets persist in a target registry file (``--registry``, else
   ``CONNECTOR_TARGET_REGISTRY``, else a per-user application-data default). A
   registry that cannot be loaded stops the launcher; it is never recreated.
-* Company TLS uses the CA bundle given by ``--tls-ca`` / ``CONNECTOR_TLS_CA``. An
-  invalid CA stops the launcher; without one the connector starts, but every
-  company operation fails closed.
-* Target lifecycle (register/approve/reapprove/revoke/delete) is managed from this
-  terminal: whoever can type here is the operator, the same trust model as the
-  pairing codes printed here. There is no HTTP route or token for it, and no
-  operator command takes MySQL credentials.
+* Company TLS trust is chosen per target: the CA bundle given by ``--tls-ca`` /
+  ``CONNECTOR_TLS_CA`` ("configured"), a CA bundle uploaded with the request, or
+  the Windows certificate store. An invalid ``--tls-ca`` stops the launcher;
+  without one, targets that use it fail closed.
+* Target lifecycle (register/approve/reapprove/revoke/delete) can also be managed
+  from this terminal: whoever can see or type here is the operator, the same trust
+  model as the pairing codes printed here. No operator command takes MySQL
+  credentials. Approval requests and codes are printed only to an interactive
+  terminal, and the HTTP access log is off so request lines never mix into it.
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence, TextIO
 
-from connector.policy import CompanyTarget, TARGET_MODE_COMPANY
+from connector.policy import CompanyTarget, TARGET_MODE_COMPANY, console_text
 from connector.registry_store import (
     REGISTRY_PATH_ENV_VAR,
     RegistryError,
@@ -109,8 +114,8 @@ def _argument_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help=(
-            "PEM CA bundle used to verify company MySQL servers. Overrides %s. "
-            "Without it, company operations fail closed." % TLS_CA_ENV_VAR
+            "PEM CA bundle for targets whose TLS trust is 'configured'. Overrides %s. "
+            "Without it, those targets fail closed." % TLS_CA_ENV_VAR
         ),
     )
     return parser
@@ -236,9 +241,9 @@ MySQL usernames/passwords are never entered here; users supply their own in the 
 
 
 def _format_target_line(target: dict) -> str:
-    return "  %-24s %-17s %s:%s  %s" % (
-        target["target_id"], target["approval_state"], target["host"], target["port"],
-        target["display_name"])
+    # Names may come from the page: escaped so they cannot alter the terminal.
+    return "  %-24s %-17s %s:%s  %s" % tuple(console_text(target[key]) for key in (
+        "target_id", "approval_state", "host", "port", "display_name"))
 
 
 def run_operator_command(runtime: ConnectorRuntime, line: str) -> str:
@@ -337,7 +342,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     targets = runtime.list_company_targets(approved_only=False)
     approved = sum(1 for target in targets if target["approval_state"] == "approved")
     tls_line = config.tls_ca_path or (
-        f"NOT CONFIGURED - company operations will fail (use --tls-ca or {TLS_CA_ENV_VAR})")
+        f"NOT CONFIGURED - targets that use it will fail (use --tls-ca or {TLS_CA_ENV_VAR})")
     sys.stdout.write(
         "MySQL DBA Validator local connector\n"
         f"  listening on : http://{DEFAULT_BIND_HOST}:{DEFAULT_PORT} (loopback only)\n"
@@ -348,6 +353,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "  Type 'help' here for operator target commands.\n"
     )
     print_pairing_code(runtime, sys.stdout)
+
+    if sys.stdin is not None and sys.stdin.isatty() and sys.stdout.isatty():
+        # Approval codes go only to an interactive terminal, never to a redirected file.
+        runtime.approval_notifier = lambda text: (sys.stdout.write(text), sys.stdout.flush())
 
     if sys.stdin is not None and sys.stdin.isatty():
         threading.Thread(
@@ -360,7 +369,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     import uvicorn  # imported lazily so tests do not need a server loop
 
     try:
-        uvicorn.run(app, host=DEFAULT_BIND_HOST, port=DEFAULT_PORT, log_level="info")
+        # access_log=False: request lines would otherwise share the console that
+        # shows approval requests, and Uvicorn logs the query string unescaped.
+        uvicorn.run(app, host=DEFAULT_BIND_HOST, port=DEFAULT_PORT, log_level="info", access_log=False)
     finally:
         runtime.shutdown()
     return 0

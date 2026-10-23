@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import socket
+import ssl
 
 import pytest
 from fastapi import Request
@@ -20,7 +21,10 @@ from connector.policy import (
     validate_company_target,
 )
 from connector.server import ConnectorRuntime, create_app
+from tests.tls_test_ca import company_ca_path
 
+# A real CA file: the connector loads the configured CA into an SSLContext itself.
+COMPANY_CA = company_ca_path()
 VALID_ORIGIN = "https://inf-extends-gardening-retrieval.trycloudflare.com"
 
 SAFE_COMPANY_DNS = {
@@ -51,7 +55,7 @@ def stage3b_client(monkeypatch):
         allowed_origins=[VALID_ORIGIN],
         pairing_ttl_seconds=30,
         session_ttl_seconds=30,
-        company_tls_ca_path="/etc/ssl/certs/company-ca.pem",
+        company_tls_ca_path=COMPANY_CA,
     )
     app = create_app(runtime=runtime)
     with TestClient(app) as client:
@@ -916,7 +920,7 @@ def test_stage3c_c1_uses_exact_validated_ip_for_socket_and_mysql_handoff(stage3b
                         lambda *args, **kwargs: fake_conn)
 
     runtime = stage3b_client.app.state.connector
-    runtime.company_tls_ca_path = "/etc/ssl/certs/company-ca.pem"
+    runtime.company_tls_ca_path = COMPANY_CA
     destination = runtime.resolve_and_validate_approved_company_target(
         "pin-socket-target")
     calls["count"] = 0
@@ -927,7 +931,7 @@ def test_stage3c_c1_uses_exact_validated_ip_for_socket_and_mysql_handoff(stage3b
         database="appdb",
         connect_timeout=2,
         tls_hostname="db.company.example",
-        tls_ca_path="/etc/ssl/certs/company-ca.pem",
+        tls_ca_path=COMPANY_CA,
     )
 
     # The returned connection is the same pymysql connection, confirmed read-only.
@@ -1000,10 +1004,11 @@ def test_stage3c_c1_closes_socket_when_connect_fails(stage3b_client, monkeypatch
                         fail_pymysql_connect)
 
     runtime = stage3b_client.app.state.connector
-    runtime.company_tls_ca_path = "/etc/ssl/certs/company-ca.pem"
+    runtime.company_tls_ca_path = COMPANY_CA
     destination = runtime.resolve_and_validate_approved_company_target(
         "pin-failure-target")
-    with pytest.raises(ValueError, match="database_connection_failed"):
+    # A TCP connect timeout is reported as such (it was the generic code before).
+    with pytest.raises(ValueError, match="^network_timeout$"):
         runtime.connect_company_target_mysql(
             destination,
             username="appuser",
@@ -1011,7 +1016,7 @@ def test_stage3c_c1_closes_socket_when_connect_fails(stage3b_client, monkeypatch
             database="appdb",
             connect_timeout=2,
             tls_hostname="db.company.example",
-            tls_ca_path="/etc/ssl/certs/company-ca.pem",
+            tls_ca_path=COMPANY_CA,
         )
 
     assert seen["destination"] == ("93.184.216.34", 3306)
@@ -1102,13 +1107,16 @@ def test_stage3c_c2_tls_uses_original_hostname_not_ip_and_requires_verified_tls(
         database="appdb",
         connect_timeout=2,
         tls_hostname="db.company.example",
-        tls_ca_path="/etc/ssl/certs/company-ca.pem",
+        tls_ca_path=COMPANY_CA,
     )
 
     assert seen["destination"] == ("93.184.216.34", 3306)
-    assert seen["ssl"]["ca"] == "/etc/ssl/certs/company-ca.pem"
-    assert seen["ssl"]["check_hostname"] is True
-    assert seen["ssl"]["verify_mode"] == 2
+    # PyMySQL receives a verified SSLContext built from the configured CA.
+    assert isinstance(seen["ssl"], ssl.SSLContext)
+    assert seen["ssl"].check_hostname is True
+    assert seen["ssl"].verify_mode == ssl.CERT_REQUIRED
+    assert [cert["subject"] for cert in seen["ssl"].get_ca_certs()] == [
+        ((("commonName", "Connector Test CA"),),)]
     assert seen["pymysql_sock"] is not None
     # Unbuffered and dict rows: the shared evidence collectors' row contract.
     assert seen["cursorclass"] is connector_server.pymysql.cursors.SSDictCursor
@@ -1171,7 +1179,7 @@ def test_stage3c_c2_rejects_tls_mismatch_and_missing_ca(stage3b_client, monkeypa
             database="appdb",
             connect_timeout=2,
             tls_hostname="evil.example",
-            tls_ca_path="/etc/ssl/certs/company-ca.pem",
+            tls_ca_path=COMPANY_CA,
         )
 
     runtime.company_tls_ca_path = None

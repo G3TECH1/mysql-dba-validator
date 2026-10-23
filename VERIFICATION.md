@@ -108,6 +108,88 @@ locally.
 6. The zip and its `.sha256` are attached to a **draft** release, which a
    maintainer verifies and publishes by hand ([RELEASING.md](RELEASING.md)).
 
+## Unreleased: company connection errors and session expiry
+
+Working tree on top of `b44d364` (not committed, not released), 2026-10-23.
+Company connection failures get stable codes (see
+[connector/README.md](connector/README.md#connection-errors)), discovery
+returns the same codes as validation, and the page warns before a connector
+session expires and reselects the previous target after re-pairing. Error
+numbers were checked against the MySQL 8.0 and 8.4 server and client error
+references; PyMySQL behaviour against the 1.2.3 source (the release pin).
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Full test suite and `pip check` | 1443 passed, 4 skipped; `pip check` clean | Maintainer's Windows 10 machine, Python 3.13.5, PyMySQL 1.2.0 (installed) |
+| New connection-error tests, read-only boundary, company policy | 171 passed | Same machine, PyMySQL 1.2.3 (the release pin, loaded from a scratch directory) |
+| New tests against a weakened connector | Error-number-only classifier: 21 fail. Discovery without the shared codes: 29 fail | Same machine, scratch pytest plugin |
+
+The real-driver tests run PyMySQL's own `Connection.connect()` over an
+in-memory socket. They show that the TLS context requires a certificate and
+host-name match against the configured CA, and that the certificate is checked
+against the approved host name while TCP goes to the pinned IP. They also show
+that only the TLS request is written before the handshake, and nothing is
+written when the server offers no TLS. One existing assertion changed: a TCP
+connect timeout is now `network_timeout`, not `database_connection_failed`
+(`test_stage3c_c1_closes_socket_when_connect_fails`).
+
+Not shown: any live MySQL server, real TLS handshakes, company infrastructure,
+the page in a browser (frontend checks are static), or CI.
+
+## Unreleased: adding targets from the page
+
+Same working tree, 2026-10-23, on top of the work above (not committed, not
+released). The page can request a target; the console prints the exact request
+and a one-time code that approves it (see
+[connector/README.md](connector/README.md#adding-a-target-from-the-page)).
+Trust is per target (`configured`, `bundle:<sha256>`, `system` on Windows), and
+the connector passes PyMySQL an `ssl.SSLContext` it builds itself.
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Full test suite and `pip check` | 1543 passed, 4 skipped; `pip check` clean | Maintainer's Windows 10 machine, Python 3.13.5, PyMySQL 1.2.0 (installed) |
+| Onboarding, connection-error, company policy, read-only boundary, B2 and credential tests | 385 passed | Same machine, PyMySQL 1.2.3 (the release pin, loaded from a scratch directory) |
+| Onboarding tests against 12 weakened variants (code check, session binding, DNS re-check, single use, trust fallback, driver TLS-required check, bundle hash, private-key refusal, ASCII hosts, name characters, console escaping, access log) | Every variant makes at least one test fail | Same machine, scratch pytest plugin |
+| Page scripts parse | Both inline scripts compile (`new Function`) | Headless Chrome on a scratch copy; nothing was executed |
+
+Existing tests changed because the connector now loads the configured CA
+itself: tests that pointed at a CA path that does not exist now use a generated
+CA file (`tests/tls_test_ca.py`), assertions on the old `ssl` dict now check
+the `SSLContext` (certificate required, host-name check, the loaded CA), and the
+route-list test includes the two new routes.
+
+Not shown: any live MySQL server or real TLS handshake, the Windows certificate
+store against a real server, macOS behaviour, the page used in a browser, the
+packaged Console executable, or CI. Strict X.509 verification
+(`VERIFY_X509_STRICT`) is unchanged and untested against real chains.
+
+## Unreleased: release-candidate checks
+
+Same working tree, 2026-10-23 (not committed, not released). Adds a PyMySQL
+floor (`pymysql>=1.2.0` in `requirements.txt`): the PyMySQL v1.0.2 and v1.1.3
+sources skip TLS without an error when the server does not offer it, and
+v1.2.0 raises `CR_SSL_CONNECTION_ERROR` instead. The release builds already
+pin 1.2.3. The Windows certificate-store test no longer skips on other
+platforms (it checks the refusal there); the macOS allowed-skip list is
+unchanged.
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Connector, read-only boundary and frontend tests (13 files, not the full suite) | 659 passed, 0 skipped | Maintainer's Windows 10 machine, Python 3.13.5, PyMySQL 1.2.0; this tree, offline |
+| `tests/test_release_macos.py` | 83 passed, 3 skipped (symbolic-link and POSIX path tests, which run on macOS) | Same; this tree |
+| Store test with `sys.platform` reported as `darwin` | The refusal branch passes | Same machine; a simulation, not a macOS run |
+| Live TLS through the connector's HTTP routes, including the page request and approval routes (in-process test client; real DNS, sockets and PyMySQL) | T1, uploaded CA bundle that signs the server: databases listed, and the server's general log shows the login over TLS. T2, uploaded bundle from another CA: `tls_verification_failed`, although the connector's configured CA would have verified (no fallback). T3, host name not in the certificate: `tls_verification_failed`. No login reached the server in T2 or T3. T5, after T2 and T3: works again. The password was never in the bytes sent before TLS | Disposable MySQL Community Server 8.0.45 on the maintainer's machine, PyMySQL 1.2.0; the tree before the dependency and documentation changes above |
+| T4a, plaintext login with the `mysql` client | `ERROR 1045` from an account that requires SSL | Same server. Shows the account setting, not `require_secure_transport` |
+| PyMySQL 1.2.3 runs of the server-offers-no-TLS tests | Reported as passed during development; not re-run for this record | Scratch install of 1.2.3 |
+
+Not shown: T4b (a live server that offers no TLS; only the real-driver test
+over an in-memory socket covers it), the negative cases through the page in a
+browser, the full suite, Python 3.14 or PyMySQL 1.2.3 on this tree (the totals
+in the sections above are for earlier states of the tree), any CI run of this
+tree (the macOS CI result recorded for v0.5.1 applies to v0.5.1 only), a real
+Mac (including approval prompts in Terminal), MySQL 8.4, a packaged build, and
+company infrastructure, VPN and TLS.
+
 ## v0.5.1 release verification
 
 All from tag `v0.5.1`, commit `d8aef32fc5dc12648bbf576fbb579350e563f0fd`

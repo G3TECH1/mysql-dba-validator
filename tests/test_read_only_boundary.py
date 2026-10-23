@@ -26,6 +26,7 @@ from backend.parser import call_names
 from sqlglot.dialects.dialect import Dialect
 from connector.server import ConnectorRuntime
 from tests import test_connector_remote_evidence as remote
+from tests.tls_test_ca import company_ca_path
 from tests.test_local_evidence_credentials import mysql, post  # noqa: F401  (mysql is a fixture)
 
 # Statements that may reach a database during validation (prefixes of the exact text).
@@ -142,9 +143,9 @@ def test_require_read_only_session_closes_an_unconfirmed_connection():
 def test_company_tls_still_requires_a_ca_and_verifies_certificate_and_host():
     runtime = ConnectorRuntime()
     with pytest.raises(ValueError):
-        runtime._build_company_mysql_ssl_config(hostname="db.company.example", ca_path=None)
-    config = runtime._build_company_mysql_ssl_config(hostname="db.company.example", ca_path="/ca.pem")
-    assert config["verify_mode"] == ssl.CERT_REQUIRED and config["check_hostname"] is True
+        runtime._company_tls_context(None, ca_path=None)
+    context = runtime._company_tls_context(None, ca_path=company_ca_path())
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname is True
 
 
 def test_no_evidence_connection_enables_multi_statements():

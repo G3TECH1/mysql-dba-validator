@@ -8,12 +8,16 @@ import json
 import logging
 import re
 import secrets
+import os
 import socket
 import ssl
+import sys
+import tempfile
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pymysql
@@ -25,7 +29,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 from backend.analyzer import analyze_batch
-from backend.db import enforce_read_only_session, validate_database_identifier
+from backend.db import enforce_read_only_session, mysql_errno, validate_database_identifier
 from backend.db_evidence import (
     PLAN_NOT_ELIGIBLE,
     DatabaseEvidence,
@@ -38,9 +42,14 @@ from backend.parser import parse_sql
 from backend.risk_engine import score_statement
 
 from connector.policy import (
+    TLS_POLICY_CONFIGURED,
+    TLS_POLICY_SYSTEM,
     CompanyTarget,
     CompanyTargetRegistry,
+    console_text,
+    parse_tls_policy,
     validate_company_target,
+    validate_display_name,
 )
 from connector.registry_store import (
     RegistryError,
@@ -62,6 +71,19 @@ PAIRING_TOKEN_BYTES = 32
 SESSION_TOKEN_BYTES = 32
 PAIRING_RATE_LIMIT_MAX_FAILURES = 5
 PAIRING_RATE_LIMIT_WINDOW_SECONDS = 60.0
+# Target requests made from the page and approved with a code shown only in the
+# connector console. Requests live in memory only.
+TARGET_REQUEST_TTL_SECONDS = 300
+MAX_PENDING_TARGET_REQUESTS = 3
+MAX_FAILED_CODES_PER_TARGET_REQUEST = 3
+# Separate from pairing, so failed approvals can never lock pairing out (or the reverse).
+APPROVAL_RATE_LIMIT_MAX_FAILURES = 5
+APPROVAL_RATE_LIMIT_WINDOW_SECONDS = 60.0
+APPROVAL_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32
+APPROVAL_CODE_LENGTH = 8
+MAX_CA_BUNDLE_BYTES = 256 * 1024
+# A CA bundle travels as a JSON string, so its newlines are escaped on the wire.
+MAX_TARGET_REQUEST_PAYLOAD_BYTES = 320 * 1024
 # No browser origin is trusted by default. Allowed origins must be configured
 # explicitly (see connector/launcher.py and parse_allowed_origins); an empty list
 # makes every origin-checked route fail closed.
@@ -87,7 +109,11 @@ BROWSER_SESSION_ALLOWED_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(r"^/company/targets$")),
     ("POST", re.compile(r"^/company/targets/" + _TARGET_ID_SEGMENT + r"/databases$")),
     ("POST", re.compile(r"^/company/targets/" + _TARGET_ID_SEGMENT + r"/validate$")),
+    # A request only reaches the console; approval needs the code shown there.
+    ("POST", re.compile(r"^/company/target-requests$")),
+    ("POST", re.compile(r"^/company/target-requests/confirm$")),
 )
+TARGET_REQUEST_PATHS = frozenset({"/company/target-requests", "/company/target-requests/confirm"})
 
 
 class CompanyTargetOperationError(ValueError):
@@ -248,6 +274,29 @@ class CompanyValidationRequest(CompanyLoginFields):
         return value
 
 
+class TargetRequestBody(BaseModel):
+    """A target the page asks to add (or, with target_id only, to re-approve).
+
+    Destination metadata and public CA certificates only: unknown fields, and so
+    any MySQL login, are rejected.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    target_id: str | None = Field(default=None, min_length=1, max_length=128)
+    display_name: str | None = Field(default=None, max_length=256)
+    host: str | None = Field(default=None, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535, strict=True)
+    trust: str | None = Field(default=None, max_length=16)
+    ca_pem: str | None = Field(default=None, max_length=MAX_CA_BUNDLE_BYTES)
+
+
+class TargetRequestConfirmBody(BaseModel):
+    # The code travels in the body only, never in a URL or a log line.
+    model_config = ConfigDict(extra="forbid")
+    request_id: str = Field(..., min_length=1, max_length=64)
+    approval_code: str = Field(..., min_length=1, max_length=16)
+
+
 D2_EXPLAIN_OPERATIONS = {"EXPLAIN_SELECT", "EXPLAIN_UPDATE", "EXPLAIN_DELETE"}
 MAX_EXPLAIN_ROWS = 100
 MAX_DISCOVERED_DATABASES = 1000
@@ -277,6 +326,28 @@ class CompanyTargetDestination:
     validated_ip: str
     address_family: int
     port: int
+    # Set by destination validation; the connection takes the target's TLS trust
+    # policy from the registry through it, never from the caller.
+    target_id: str | None = None
+
+
+@dataclass
+class PendingTargetRequest:
+    """A target request awaiting the console approval code. Memory only."""
+
+    request_id: str
+    session_token: str = field(repr=False)
+    code: str = field(repr=False)
+    target_id: str
+    display_name: str
+    host: str
+    port: int
+    tls_policy: str
+    addresses: list[str]
+    expires_at: float
+    reapproval: bool = False
+    bundle: bytes | None = field(default=None, repr=False)
+    failed_codes: int = 0
 
 
 @dataclass
@@ -315,6 +386,11 @@ class ConnectorRuntime:
     # None keeps the registry in memory (tests, library use). The launcher always
     # provides a store so approved targets survive restarts.
     registry_store: TargetRegistryStore | None = None
+    target_requests: dict[str, PendingTargetRequest] = field(default_factory=dict)
+    failed_approval_attempts: list[float] = field(default_factory=list)
+    # Writes a block of text to the operator's console. Only the launcher sets it,
+    # and only with an interactive terminal; without it, page requests are refused.
+    approval_notifier: Callable[[str], None] | None = field(default=None, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock)
 
     def _now(self) -> float:
@@ -647,6 +723,10 @@ class ConnectorRuntime:
     def _drop_session_scopes_locked(self, session_token: str) -> None:
         for key in [key for key in self.company_database_scopes if key[1] == session_token]:
             del self.company_database_scopes[key]
+        # A session's pending target request ends with the session (unpair or expiry).
+        for request_id in [rid for rid, item in self.target_requests.items()
+                           if item.session_token == session_token]:
+            del self.target_requests[request_id]
 
     def trim_failed_pairing_attempts_locked(self) -> None:
         now = self._now()
@@ -802,6 +882,262 @@ class ConnectorRuntime:
             del self.company_targets.targets[target_id]
             self._invalidate_target_scopes_locked(target_id)
             self._persist_registry_locked(previous)
+
+    # ------------------------------------------------------------------
+    # Target requests from the page. A browser session may only *ask* for a
+    # target. Approval needs the one-time code that is shown only in the
+    # connector console, next to the exact host, port, resolved addresses and
+    # TLS trust that will be approved. A request never opens a connection.
+    # ------------------------------------------------------------------
+
+    def _trust_dir(self) -> Path | None:
+        if self.registry_store is None:
+            return None
+        return self.registry_store.path.parent / "trust"
+
+    def _prune_target_requests_locked(self) -> None:
+        now = self._now()
+        for request_id in [
+            rid for rid, item in self.target_requests.items()
+            if item.expires_at <= now
+            or self.sessions.get(item.session_token) is None
+            or self.sessions[item.session_token].expires_at <= now
+        ]:
+            del self.target_requests[request_id]
+
+    def is_approval_rate_limited(self) -> bool:
+        with self.lock:
+            cutoff = self._now() - APPROVAL_RATE_LIMIT_WINDOW_SECONDS
+            self.failed_approval_attempts = [
+                ts for ts in self.failed_approval_attempts if ts > cutoff][-APPROVAL_RATE_LIMIT_MAX_FAILURES:]
+            return len(self.failed_approval_attempts) >= APPROVAL_RATE_LIMIT_MAX_FAILURES
+
+    def _requested_trust(self, trust: str | None, ca_pem: str | None) -> tuple[str, bytes | None]:
+        """The explicit trust choice of a new request: (tls_policy, bundle bytes)."""
+        if trust in {TLS_POLICY_CONFIGURED, TLS_POLICY_SYSTEM} and ca_pem is not None:
+            raise CompanyTargetOperationError("invalid_target_request", 400)
+        if trust == TLS_POLICY_CONFIGURED:
+            if not self.company_tls_ca_path:
+                raise CompanyTargetOperationError("tls_ca_not_configured", 409)
+            return TLS_POLICY_CONFIGURED, None
+        if trust == TLS_POLICY_SYSTEM:
+            try:
+                _system_trust_context()
+            except ValueError as exc:
+                raise CompanyTargetOperationError(str(exc), 409) from exc
+            return TLS_POLICY_SYSTEM, None
+        if trust == "bundle":
+            if self._trust_dir() is None:
+                raise CompanyTargetOperationError("trust_storage_unavailable", 409)
+            try:
+                data = validate_ca_bundle(ca_pem)
+            except ValueError as exc:
+                raise CompanyTargetOperationError(str(exc), 400) from exc
+            return "bundle:" + hashlib.sha256(data).hexdigest(), data
+        raise CompanyTargetOperationError("invalid_trust_policy", 400)
+
+    def _trust_description(self, tls_policy: str, bundle: bytes) -> str:
+        kind, digest = parse_tls_policy(tls_policy)
+        if kind == TLS_POLICY_CONFIGURED:
+            return "connector CA bundle " + console_text(self.company_tls_ca_path or "")
+        if kind == TLS_POLICY_SYSTEM:
+            return "Windows certificate store"
+        count, subjects = _ca_subjects(bundle)
+        lines = ["uploaded CA bundle, SHA-256 %s, %d CA certificate(s)" % (digest, count)]
+        lines += ["               " + console_text(subject) for subject in subjects]
+        if count > len(subjects):
+            lines.append("               (and %d more)" % (count - len(subjects)))
+        return "\n".join(lines)
+
+    def create_target_request(self, session_token: str, body: TargetRequestBody) -> PendingTargetRequest:
+        if self.approval_notifier is None:
+            raise CompanyTargetOperationError("approval_console_unavailable", 409)
+        previous_addresses = None
+        bundle = None
+        if body.target_id is not None:
+            # Re-approval of an existing target: nothing about it can be changed here.
+            if any(value is not None for value in (body.display_name, body.host, body.port, body.trust, body.ca_pem)):
+                raise CompanyTargetOperationError("invalid_target_request", 400)
+            with self.lock:
+                existing = self.company_targets.get(body.target_id)
+                if existing is None:
+                    raise CompanyTargetOperationError("unknown_company_target", 404)
+                if existing.approval_state not in {"approved", "needs_reapproval"}:
+                    raise CompanyTargetOperationError("company_target_not_reapprovable", 409)
+                target_id, display_name, host, port = (
+                    existing.target_id, existing.display_name, existing.host, existing.port)
+                tls_policy = existing.tls_policy or TLS_POLICY_CONFIGURED
+                snapshot = existing.dns_identity_snapshot or {}
+                previous_addresses = list(snapshot.get("addresses") or [])
+            try:
+                kind, digest = parse_tls_policy(tls_policy)
+                bundle = self._load_trust_bundle(digest) if kind == "bundle" else None
+            except ValueError as exc:
+                raise CompanyTargetOperationError("trust_policy_unavailable", 409) from exc
+        else:
+            try:
+                display_name = validate_display_name(body.display_name)
+                host = (body.host or "").strip().lower()
+                port = body.port
+                validate_company_target(CompanyTarget(
+                    target_id="request", display_name=display_name, host=host,
+                    port=port if port is not None else 0, approval_state="pending"))
+            except ValueError as exc:
+                raise CompanyTargetOperationError(str(exc), 400) from exc
+            tls_policy, bundle = self._requested_trust(body.trust, body.ca_pem)
+            target_id = None
+            with self.lock:
+                if any(t.host.lower() == host and t.port == port for t in self.company_targets.targets.values()):
+                    raise CompanyTargetOperationError("company_target_exists", 409)
+
+        # DNS only: no connection to the target is made for a request.
+        try:
+            snapshot = build_company_dns_identity_snapshot(host)
+        except ValueError as exc:
+            raise CompanyTargetOperationError(str(exc), 400) from exc
+        code = "".join(secrets.choice(APPROVAL_CODE_ALPHABET) for _ in range(APPROVAL_CODE_LENGTH))
+
+        with self.lock:
+            self._prune_target_requests_locked()
+            # One open request per session: a new one replaces the previous one.
+            for request_id in [rid for rid, item in self.target_requests.items()
+                               if item.session_token == session_token]:
+                del self.target_requests[request_id]
+            if len(self.target_requests) >= MAX_PENDING_TARGET_REQUESTS:
+                raise CompanyTargetOperationError("target_request_limit_reached", 429)
+            if target_id is None:
+                taken = set(self.company_targets.targets) | self.deleted_target_ids | {
+                    item.target_id for item in self.target_requests.values()}
+                target_id = "ui-" + secrets.token_hex(4)
+                while target_id in taken:
+                    target_id = "ui-" + secrets.token_hex(4)
+            request = PendingTargetRequest(
+                request_id=secrets.token_urlsafe(16), session_token=session_token, code=code,
+                target_id=target_id, display_name=display_name, host=host, port=port,
+                tls_policy=tls_policy, addresses=list(snapshot["addresses"]),
+                expires_at=self._now() + TARGET_REQUEST_TTL_SECONDS,
+                reapproval=previous_addresses is not None, bundle=bundle)
+            self.target_requests[request.request_id] = request
+
+        try:
+            self.approval_notifier(format_target_request_block(
+                request, trust=self._trust_description(tls_policy, bundle),
+                previous_addresses=previous_addresses))
+        except Exception as exc:
+            with self.lock:
+                self.target_requests.pop(request.request_id, None)
+            raise CompanyTargetOperationError("approval_console_unavailable", 409) from exc
+        return request
+
+    def confirm_target_request(self, session_token: str, request_id: str, approval_code: str) -> CompanyTarget:
+        if self.is_approval_rate_limited():
+            raise CompanyTargetOperationError("approval_rate_limited", 429)
+        supplied = _normalize_approval_code(approval_code)
+        with self.lock:
+            self._prune_target_requests_locked()
+            request = self.target_requests.get(request_id)
+            if request is None or not hmac.compare_digest(
+                    request.session_token.encode("utf-8"), session_token.encode("utf-8")):
+                self.failed_approval_attempts.append(self._now())
+                raise CompanyTargetOperationError("target_request_not_found", 404)
+            if not hmac.compare_digest(request.code.encode("utf-8"), supplied.encode("utf-8")):
+                self.failed_approval_attempts.append(self._now())
+                request.failed_codes += 1
+                if request.failed_codes >= MAX_FAILED_CODES_PER_TARGET_REQUEST:
+                    del self.target_requests[request_id]
+                    raise CompanyTargetOperationError("target_request_cancelled", 403)
+                raise CompanyTargetOperationError("approval_code_invalid", 403)
+            # Single use: consumed before anything else, so a replay finds nothing.
+            del self.target_requests[request_id]
+
+        # The addresses approved are exactly the ones the console showed.
+        try:
+            snapshot = build_company_dns_identity_snapshot(request.host)
+        except ValueError as exc:
+            raise CompanyTargetOperationError(str(exc), 400) from exc
+        if snapshot["addresses"] != request.addresses:
+            raise CompanyTargetOperationError("dns_changed_since_request", 409)
+        kind, digest = parse_tls_policy(request.tls_policy)
+        if kind == "bundle":
+            # Trust material is written (and re-read) before the registry refers to it.
+            try:
+                self._store_trust_bundle(request.bundle, digest)
+                self._load_trust_bundle(digest)
+            except (OSError, ValueError) as exc:
+                raise CompanyTargetOperationError("trust_bundle_unavailable", 500) from exc
+
+        with self.lock:
+            now = self._now()
+            previous = self._registry_state_locked()
+            if request.reapproval:
+                current = self.company_targets.get(request.target_id)
+                if (current is None or current.host != request.host or current.port != request.port
+                        or (current.tls_policy or TLS_POLICY_CONFIGURED) != request.tls_policy
+                        or current.approval_state not in {"approved", "needs_reapproval"}):
+                    raise CompanyTargetOperationError("company_target_changed", 409)
+            else:
+                if (request.target_id in self.company_targets.targets
+                        or request.target_id in self.deleted_target_ids
+                        or any(t.host.lower() == request.host and t.port == request.port
+                               for t in self.company_targets.targets.values())):
+                    raise CompanyTargetOperationError("company_target_exists", 409)
+                current = self.company_targets.register(CompanyTarget(
+                    target_id=request.target_id, display_name=request.display_name,
+                    host=request.host, port=request.port, tls_required=True,
+                    tls_policy=request.tls_policy, approval_state="pending", created_at=now))
+            current.dns_identity_snapshot = snapshot
+            current.dns_snapshot_created_at = now
+            current.tls_hostname = current.host
+            current.approval_state = "approved"
+            if current.approved_at is None:
+                current.approved_at = now
+            current.updated_at = now
+            self._invalidate_target_scopes_locked(current.target_id)
+            self._persist_registry_locked(previous)
+            return current
+
+    def _store_trust_bundle(self, data: bytes | None, digest: str) -> None:
+        """Write a CA bundle as trust/<sha256>.pem (atomic). Content-addressed, so a
+        good existing file is kept and a damaged one is replaced."""
+        directory = self._trust_dir()
+        if directory is None or data is None or hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError("trust_bundle_unavailable")
+        try:
+            self._load_trust_bundle(digest)
+            return
+        except ValueError:
+            pass
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix=".trust-", suffix=".tmp", dir=str(directory))
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, directory / f"{digest}.pem")
+            temp_name = None
+        finally:
+            if temp_name is not None:
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    pass
+
+    def _load_trust_bundle(self, digest: str | None) -> bytes:
+        """The stored bundle's bytes, only if they still hash to the approved digest."""
+        directory = self._trust_dir()
+        if directory is None or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("trust_bundle_unavailable")
+        path = directory / f"{digest}.pem"
+        try:
+            if path.stat().st_size > MAX_CA_BUNDLE_BYTES:
+                raise ValueError("trust_bundle_unavailable")
+            data = path.read_bytes()
+        except OSError as exc:
+            raise ValueError("trust_bundle_unavailable") from exc
+        if len(data) > MAX_CA_BUNDLE_BYTES or hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError("trust_bundle_unavailable")
+        return data
 
     def list_company_targets(self, *, approved_only: bool) -> list[dict[str, Any]]:
         with self.lock:
@@ -1111,24 +1447,42 @@ class ConnectorRuntime:
             validated_ip=selected_ip,
             address_family=socket.AF_INET if ip_obj.version == 4 else socket.AF_INET6,
             port=target.port,
+            target_id=target_id,
         )
 
-    def _build_company_mysql_ssl_config(self, *, hostname: str, ca_path: str | None = None) -> dict[str, Any]:
-        resolved_ca = ca_path if ca_path is not None else self.company_tls_ca_path
-        if not isinstance(hostname, str) or not hostname.strip():
-            raise ValueError("database_connection_failed")
-        if resolved_ca is None or not str(resolved_ca).strip():
-            raise ValueError("database_connection_failed")
-        config: dict[str, Any] = {
-            "ca": str(resolved_ca),
-            "check_hostname": True,
-            "verify_mode": ssl.CERT_REQUIRED,
-        }
-        if self.company_tls_client_cert_path:
-            config["cert"] = self.company_tls_client_cert_path
-        if self.company_tls_client_key_path:
-            config["key"] = self.company_tls_client_key_path
-        return config
+    def _company_tls_context(self, tls_policy: str | None, *, ca_path: str | None = None) -> ssl.SSLContext:
+        """The verified TLS context for one target's trust policy.
+
+        Any unknown policy, missing CA, changed bundle or empty store fails closed:
+        there is no fallback to another trust source, to unverified TLS or to
+        plaintext. The context is passed to PyMySQL as an ``ssl.SSLContext`` (its
+        supported API; a dict without a CA would disable verification there).
+        """
+        try:
+            kind, digest = parse_tls_policy(tls_policy)
+            if kind == TLS_POLICY_CONFIGURED:
+                resolved_ca = ca_path if ca_path is not None else self.company_tls_ca_path
+                if resolved_ca is None or not str(resolved_ca).strip():
+                    raise ValueError("tls_ca_not_configured")
+                context = ssl.create_default_context(cafile=str(resolved_ca))
+            elif kind == TLS_POLICY_SYSTEM:
+                context = _system_trust_context()
+            else:
+                # The bytes loaded are the bytes whose hash was just checked.
+                context = ssl.create_default_context(cadata=self._load_trust_bundle(digest).decode("ascii"))
+            context.check_hostname = True
+            context.verify_mode = ssl.CERT_REQUIRED
+            if context.minimum_version < ssl.TLSVersion.TLSv1_2:
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+            # Kept as before: PyMySQL cleared VERIFY_X509_STRICT on the contexts it
+            # built for the connector. Enabling it is a separate decision that needs
+            # evidence from real server certificate chains.
+            context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+            if self.company_tls_client_cert_path:
+                context.load_cert_chain(self.company_tls_client_cert_path, self.company_tls_client_key_path)
+            return context
+        except (ValueError, OSError) as exc:  # ssl.SSLError is an OSError
+            raise ValueError(COMPANY_CONNECTION_FAILED) from exc
 
     def connect_company_target_mysql(
         self,
@@ -1148,16 +1502,28 @@ class ConnectorRuntime:
 
         sock = None
         connection = None
+        # Only failures of the TCP connect and of the MySQL handshake (TLS, login) are
+        # classified; configuration and read-only failures keep the generic code.
+        network_step = False
         try:
             tls_host = (tls_hostname or destination.hostname).strip()
             if tls_host != destination.hostname:
                 raise ValueError("database_connection_failed")
-            ssl_config = self._build_company_mysql_ssl_config(
-                hostname=tls_host, ca_path=tls_ca_path)
+            # The trust policy comes from the approved target in the registry.
+            tls_policy = None
+            if destination.target_id is not None:
+                bound = self.company_targets.get(destination.target_id)
+                if bound is None or bound.host != destination.hostname:
+                    raise ValueError("database_connection_failed")
+                tls_policy = bound.tls_policy
+            tls_context = self._company_tls_context(tls_policy, ca_path=tls_ca_path)
+            _require_verified_tls(tls_context)
             sock = socket.socket(
                 destination.address_family, socket.SOCK_STREAM)
             sock.settimeout(connect_timeout)
+            network_step = True
             sock.connect((destination.validated_ip, destination.port))
+            network_step = False
 
             connection = pymysql.connect(
                 host=tls_host,
@@ -1175,22 +1541,19 @@ class ConnectorRuntime:
                 # shared backend evidence/metadata collectors expect the same
                 # dictionary-row contract as local validation's DictCursor.
                 cursorclass=pymysql.cursors.SSDictCursor,
-                ssl=ssl_config,
+                ssl=tls_context,
             )
+            # PyMySQL 1.2.x keeps a given SSLContext as is and then requires TLS. Its
+            # other mode (no ssl argument) allows unverified TLS or plaintext; refuse
+            # anything but our context in required mode. Test doubles lack these.
+            if (getattr(connection, "ctx", tls_context) is not tls_context
+                    or getattr(connection, "_ssl_required", True) is not True):
+                raise ValueError("database_connection_failed")
+            _require_verified_tls(tls_context)
+            network_step = True
             connection.connect(sock=sock)
+            network_step = False
             return self.require_read_only_session(connection)
-        except (pymysql.MySQLError, TimeoutError, OSError, ValueError) as exc:
-            if connection is not None:
-                try:
-                    connection.close()
-                except Exception:
-                    pass
-            if sock is not None:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-            raise ValueError("database_connection_failed") from exc
         except Exception as exc:
             if connection is not None:
                 try:
@@ -1202,7 +1565,8 @@ class ConnectorRuntime:
                     sock.close()
                 except Exception:
                     pass
-            raise ValueError("database_connection_failed") from exc
+            code = classify_company_connection_error(exc) if network_step else COMPANY_CONNECTION_FAILED
+            raise ValueError(code) from exc
 
     def connect_company_target(self, destination: CompanyTargetDestination, *args, **kwargs):
         return self.connect_company_target_mysql(destination, *args, **kwargs)
@@ -1211,6 +1575,7 @@ class ConnectorRuntime:
         with self.lock:
             self.pairing_tokens.clear()
             self.sessions.clear()
+            self.target_requests.clear()
             self.company_database_scopes.clear()
             self.failed_pairing_attempts.clear()
             self.deleted_target_ids.clear()
@@ -1224,6 +1589,175 @@ def _safe_json_error(message: str, *, status_code: int, error_code: str | None =
     return payload
 
 
+COMPANY_CONNECTION_FAILED = "database_connection_failed"
+
+# MySQL error numbers (8.0 and 8.4 server and client error references) that identify
+# a company connection failure reliably. Anything else keeps the generic code.
+_COMPANY_MYSQL_ERRNO_CODES = {
+    1045: "auth_failed",               # ER_ACCESS_DENIED_ERROR
+    1862: "password_expired",          # ER_MUST_CHANGE_PASSWORD_LOGIN
+    1820: "password_expired",          # ER_MUST_CHANGE_PASSWORD (sandbox mode)
+    3118: "account_locked",            # ER_ACCOUNT_HAS_BEEN_LOCKED (ACCOUNT LOCK)
+    3955: "account_locked",            # ..._BLOCKED_BY_PASSWORD_LOCK (failed logins)
+    1130: "host_not_allowed",          # ER_HOST_NOT_PRIVILEGED
+    1129: "host_blocked",              # ER_HOST_IS_BLOCKED (max_connect_errors)
+    1251: "auth_method_unsupported",   # ER_NOT_SUPPORTED_AUTH_MODE
+    2059: "auth_method_unsupported",   # CR_AUTH_PLUGIN_CANNOT_LOAD
+    1040: "connection_limit_reached",  # ER_CON_COUNT_ERROR
+    1203: "connection_limit_reached",  # ER_TOO_MANY_USER_CONNECTIONS
+    1226: "connection_limit_reached",  # ER_USER_LIMIT_REACHED
+    # PyMySQL raises 2026 only when TLS is required and the server does not offer it.
+    2026: "tls_not_offered",           # CR_SSL_CONNECTION_ERROR
+}
+_COMPANY_MYSQL_NETWORK_ERRNOS = frozenset({2003, 2006, 2013})
+
+# Stable codes the browser may receive for a company connection failure, on discovery
+# as well as validation: the classified codes plus the destination checks.
+COMPANY_CONNECTION_ERROR_CODES = frozenset({
+    *_COMPANY_MYSQL_ERRNO_CODES.values(),
+    "tls_verification_failed", "tls_handshake_failed",
+    "network_timeout", "connection_refused", "unreachable",
+    "dns_resolution_failed", "dns_result_invalid", "unsafe_destination",
+    "dns_identity_mismatch", "target_needs_reapproval", "target_not_approved",
+})
+
+
+def _bounded_exception_chain(exc: BaseException, limit: int = 8) -> list[BaseException]:
+    """The exception, then what it wraps: PyMySQL's original_exception, else __cause__,
+    else __context__. Bounded and cycle-safe."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and len(chain) < limit and all(current is not seen for seen in chain):
+        chain.append(current)
+        wrapped = getattr(current, "original_exception", None)
+        if not isinstance(wrapped, BaseException):
+            wrapped = current.__cause__ or current.__context__
+        current = wrapped
+    return chain
+
+
+def classify_company_connection_error(exc: BaseException) -> str:
+    """Map a failed company connection attempt to a stable, non-sensitive code.
+
+    Uses exception types and MySQL error numbers only, never message text (which
+    carries the host, IP and user). TLS is checked first: PyMySQL wraps every
+    OSError raised while connecting, certificate failures included, as error 2003.
+    """
+    chain = _bounded_exception_chain(exc)
+    for item in chain:
+        if isinstance(item, ssl.SSLCertVerificationError):
+            return "tls_verification_failed"
+        if isinstance(item, ssl.SSLError):
+            return "tls_handshake_failed"
+    number = next((mysql_errno(item) for item in chain if isinstance(item, pymysql.MySQLError)), None)
+    if number in _COMPANY_MYSQL_ERRNO_CODES:
+        return _COMPANY_MYSQL_ERRNO_CODES[number]
+    for item in chain:
+        if isinstance(item, TimeoutError):
+            return "network_timeout"
+        if isinstance(item, ConnectionRefusedError):
+            return "connection_refused"
+    if number in _COMPANY_MYSQL_NETWORK_ERRNOS or any(isinstance(item, OSError) for item in chain):
+        return "unreachable"
+    return COMPANY_CONNECTION_FAILED
+
+
+_PEM_BEGIN_RE = re.compile(r"-----BEGIN ([A-Z0-9 ]+)-----")
+
+
+def validate_ca_bundle(pem: Any) -> bytes:
+    """Return the bundle's bytes if it is PEM CA certificates only, else raise."""
+    if not isinstance(pem, str) or not pem.isascii():
+        raise ValueError("invalid_ca_bundle")
+    data = pem.encode("ascii")
+    if len(data) > MAX_CA_BUNDLE_BYTES:
+        raise ValueError("ca_bundle_too_large")
+    if "PRIVATE KEY" in pem:
+        raise ValueError("ca_bundle_contains_private_key")
+    labels = _PEM_BEGIN_RE.findall(pem)
+    if not labels or any(label != "CERTIFICATE" for label in labels) \
+            or pem.count("-----END CERTIFICATE-----") != len(labels):
+        raise ValueError("invalid_ca_bundle")
+    try:
+        context = ssl.create_default_context(cadata=pem)
+    except (ssl.SSLError, ValueError) as exc:
+        raise ValueError("invalid_ca_bundle") from exc
+    if context.cert_store_stats().get("x509_ca", 0) < 1:
+        raise ValueError("ca_bundle_has_no_ca_certificate")
+    return data
+
+
+SYSTEM_TRUST_PLATFORM = "win32"
+
+
+def _system_trust_context() -> ssl.SSLContext:
+    """The Windows CA and ROOT stores (Python loads them when no CA file is given).
+    Other platforms are not supported yet; an empty store is refused."""
+    if sys.platform != SYSTEM_TRUST_PLATFORM:
+        raise ValueError("trust_policy_unsupported")
+    context = ssl.create_default_context()
+    if not context.get_ca_certs():
+        raise ValueError("trust_store_unavailable")
+    return context
+
+
+def _require_verified_tls(context: Any) -> None:
+    """The properties every company TLS context must have, checked before use."""
+    if (
+        not isinstance(context, ssl.SSLContext)
+        or context.verify_mode != ssl.CERT_REQUIRED
+        or context.check_hostname is not True
+        or context.minimum_version < ssl.TLSVersion.TLSv1_2
+    ):
+        raise ValueError(COMPANY_CONNECTION_FAILED)
+
+
+def _normalize_approval_code(value: str) -> str:
+    # Crockford base32 reading rules: case-insensitive, separators ignored, O = 0, I/L = 1.
+    text = value.upper().replace("-", "").replace(" ", "")
+    return text.translate(str.maketrans("OIL", "011"))
+
+
+def _ca_subjects(data: bytes, limit: int = 5) -> tuple[int, list[str]]:
+    certificates = ssl.create_default_context(cadata=data.decode("ascii")).get_ca_certs()
+    subjects = []
+    for certificate in certificates[:limit]:
+        parts = [f"{key}={value}" for rdn in certificate.get("subject", ())
+                 for key, value in rdn if key in {"commonName", "organizationName"}]
+        subjects.append(", ".join(parts) or "(no common name)")
+    return len(certificates), subjects
+
+
+def format_target_request_block(request: PendingTargetRequest, *, trust: str,
+                                previous_addresses: list[str] | None = None) -> str:
+    """The console text for one request. Every value is escaped (console_text)."""
+    rule = "=" * 70
+    title = "TARGET APPROVAL REQUEST FROM THE VALIDATOR PAGE"
+    if request.reapproval:
+        title += " (RE-APPROVAL)"
+    lines = [
+        "", rule, title,
+        "  name       : " + console_text(request.display_name),
+        "  host       : " + console_text(request.host),
+        "  port       : " + console_text(request.port),
+        "  addresses  : " + console_text(", ".join(request.addresses)),
+    ]
+    if previous_addresses is not None:
+        lines.append("  previously : " + console_text(", ".join(previous_addresses)))
+    lines += [
+        "  TLS trust  : " + trust,
+        "",
+        "  Approval code (single use, expires in %d seconds):" % TARGET_REQUEST_TTL_SECONDS,
+        "",
+        "      " + console_text(request.code[:4] + "-" + request.code[4:]),
+        "",
+        "  Enter it in the page only if every line above is what you asked for.",
+        "  Otherwise ignore it: the request expires on its own.",
+        rule, "",
+    ]
+    return "\n".join(lines)
+
+
 _COMPANY_VALIDATE_PATH_RE = re.compile(r"^/company/targets/[^/]+/validate$")
 
 
@@ -1231,6 +1765,9 @@ def _payload_limit_for(runtime: "ConnectorRuntime", method: str, path: str) -> i
     """Body-size limit per route: remote validation carries SQL, everything else is small."""
     if method.upper() == "POST" and _COMPANY_VALIDATE_PATH_RE.fullmatch(path or ""):
         return max(runtime.max_payload_bytes, MAX_COMPANY_VALIDATE_PAYLOAD_BYTES)
+    if method.upper() == "POST" and path == "/company/target-requests":
+        # Room for an optional CA bundle (public certificates only).
+        return max(runtime.max_payload_bytes, MAX_TARGET_REQUEST_PAYLOAD_BYTES)
     return runtime.max_payload_bytes
 
 
@@ -1396,7 +1933,7 @@ def create_app(*, runtime: ConnectorRuntime | None = None) -> FastAPI:
             )
 
         allowed_paths = {"/health", "/pair",
-                         "/unpair", "/db/test", "/company/targets"}
+                         "/unpair", "/db/test", "/company/targets", *TARGET_REQUEST_PATHS}
         path = request.url.path
         if path not in allowed_paths and not path.startswith("/company/targets/"):
             return JSONResponse(
@@ -1408,7 +1945,7 @@ def create_app(*, runtime: ConnectorRuntime | None = None) -> FastAPI:
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        if path in {"/health", "/pair", "/unpair", "/db/test", "/company/targets"} or path.startswith("/company/targets/"):
+        if path in allowed_paths or path.startswith("/company/targets/"):
             if request.method == "GET" and path == "/health":
                 origin = request.headers.get("Origin")
                 if origin and not runtime.validate_origin(origin):
@@ -1989,8 +2526,69 @@ def create_app(*, runtime: ConnectorRuntime | None = None) -> FastAPI:
             raise HTTPException(status_code=exc.status_code, detail=_safe_json_error(
                 exc.code, status_code=exc.status_code, error_code=exc.code)) from exc
         except Exception as exc:
+            # Same safe connection codes as /validate; anything else stays generic.
+            code = str(exc) if isinstance(exc, ValueError) else ""
+            if code not in COMPANY_CONNECTION_ERROR_CODES:
+                code = "database_discovery_failed"
             raise HTTPException(status_code=500, detail=_safe_json_error(
-                "database_discovery_failed", status_code=500, error_code="database_discovery_failed")) from exc
+                code, status_code=500, error_code=code)) from exc
+
+    def _request_session(request: Request) -> str:
+        origin = request.headers.get("Origin")
+        if not runtime.validate_origin(origin):
+            raise HTTPException(status_code=401, detail=_safe_json_error(
+                "invalid_origin", status_code=401, error_code="invalid_origin"))
+        bearer = request.headers.get("Authorization", "")
+        session_token = bearer.replace("Bearer ", "", 1).strip() if bearer else ""
+        valid, reason = runtime.validate_session(session_token, origin)
+        if not valid:
+            raise HTTPException(status_code=401, detail=_safe_json_error(
+                reason or "invalid_session", status_code=401, error_code=reason or "invalid_session"))
+        return session_token
+
+    @app.post("/company/target-requests")
+    async def create_target_request_endpoint(request: Request):
+        # Asks for a target. Nothing is approved and no connection is made: the
+        # console shows the exact request and the code needed to approve it.
+        session_token = _request_session(request)
+        body = await _read_bounded_json(
+            request, _payload_limit_for(runtime, "POST", request.url.path), "invalid_target_request")
+        try:
+            payload = TargetRequestBody.model_validate(body)
+        except ValidationError:
+            raise HTTPException(status_code=400, detail=_safe_json_error(
+                "invalid_target_request", status_code=400, error_code="invalid_target_request"))
+        try:
+            pending = runtime.create_target_request(session_token, payload)
+        except CompanyTargetOperationError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=_safe_json_error(
+                exc.code, status_code=exc.status_code, error_code=exc.code)) from exc
+        logger.info("target request awaiting console approval")
+        return {
+            "status": "awaiting_approval",
+            "request_id": pending.request_id,
+            "expires_in_seconds": TARGET_REQUEST_TTL_SECONDS,
+        }
+
+    @app.post("/company/target-requests/confirm")
+    async def confirm_target_request_endpoint(request: Request):
+        session_token = _request_session(request)
+        body = await _read_bounded_json(request, runtime.max_payload_bytes, "invalid_target_confirmation")
+        try:
+            payload = TargetRequestConfirmBody.model_validate(body)
+        except ValidationError:
+            raise HTTPException(status_code=400, detail=_safe_json_error(
+                "invalid_target_confirmation", status_code=400, error_code="invalid_target_confirmation"))
+        try:
+            target = runtime.confirm_target_request(session_token, payload.request_id, payload.approval_code)
+        except CompanyTargetOperationError as exc:
+            logger.info("target request confirmation refused")
+            raise HTTPException(status_code=exc.status_code, detail=_safe_json_error(
+                exc.code, status_code=exc.status_code, error_code=exc.code)) from exc
+        except RegistryError as exc:
+            raise _registry_unavailable() from exc
+        logger.info("target approved from the console code")
+        return {"status": "approved", "target": _target_summary(target)}
 
     @app.post("/company/targets/{target_id}/explain")
     async def execute_company_explain_endpoint(request: Request, target_id: str):

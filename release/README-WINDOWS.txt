@@ -49,6 +49,7 @@ The program folder is never written to. Per-user data lives in:
 
     %LOCALAPPDATA%\MySQLDBAValidator\
         connector-targets.json   approved company targets (no credentials)
+        trust\                   CA bundle files added from the page
         logs\backend.log         web app log, replaced on each start
 MySQL usernames and passwords typed into the page are used for that request
 only. They are not written to disk, the target registry, the logs or browser
@@ -81,15 +82,36 @@ the data folder. That file is no longer used for validation evidence.
 
 OPTIONAL: COMPANY TARGETS THROUGH THE CONNECTOR
 -----------------------------------------------
-Company MySQL targets require the CA certificate bundle that signs the
-company servers. Start the Console version from a terminal in this folder:
+Company MySQL connections always use TLS, verified against the certificates
+that sign the company servers. Start the Console version from a terminal in
+this folder:
 
     & ".\MySQL-DBA-Validator Console.exe" --tls-ca C:\path\to\company-ca.pem
 
-Without a CA bundle the connector still starts, but every company operation is
-refused. Then, in the console window: "register <id> <host> <port> <name>",
-"approve <id>". In the page: paste the pairing code, choose the target, enter
-your own MySQL login, discover databases, validate.
+--tls-ca is the connector's CA bundle, used by targets registered in the
+console window. Without it the connector still starts, but those targets are
+refused.
+
+Paste the pairing code from the console window into the page. Then add a
+target in one of two ways; both need the console window:
+- From the page: under "Add a remote connection", enter a name, host name and
+  port, and choose the trusted certificates: the connector CA bundle
+  (--tls-ca), a CA bundle file, or the Windows certificate store. The console
+  window then shows the request (host, port, resolved addresses, certificates)
+  and a one-time approval code. Check it, then enter the code in the page
+  within 5 minutes.
+- In the console window: "register <id> <host> <port> <name>", then
+  "approve <id>". These targets use the --tls-ca bundle.
+Then in the page: choose the target, enter your own MySQL login, discover
+databases, validate. The page can only ask for a target; nothing is approved
+without the code shown in the console window.
+
+A CA bundle must be PEM text ("-----BEGIN CERTIFICATE-----" blocks, CA
+certificates only, no private key, up to 256 KiB). A binary (DER) certificate
+is refused, and renaming it to .pem does not convert it. A .cer file is often
+DER (PowerShell's Export-Certificate writes .cer files as DER), so export the
+CA certificates as PEM, then open the file in Notepad and check that it holds
+only such blocks.
 
 Other Console options: --registry <file>, --session-ttl <seconds>,
 --allow-origin <origin>, --no-browser. Run it with --help for details.
@@ -104,7 +126,16 @@ TROUBLESHOOTING
   page and wait, or close the Console window), or another program uses port
   8420 or 8765.
 - The page does not open: browse to http://127.0.0.1:8420 yourself.
-- "cannot load target registry": the registry file is damaged. The program
-  refuses to start rather than overwrite it. Move or fix the file named in the
-  message.
+- "cannot load target registry": the registry file named in the message could
+  not be loaded. The program refuses to start rather than change it. After an
+  upgrade, one cause is a saved target whose host name the current, stricter
+  rules refuse (a non-ASCII name, a last part that does not start with a
+  letter such as db.1corp, or more than 253 characters); the message then ends
+  in invalid_target:targets[N], the entry's position counting from 0. Keep a
+  copy of the file and the trust folder next to it, remove only that entry,
+  start again and add the target again with a name the current rules accept
+  (it needs approval again): the xn-- form of a non-ASCII name, or, when the
+  old name has no valid form, another DNS name or alias that resolves to the
+  same server, if your DNS provides one. Otherwise the file is damaged: move
+  or fix it.
 - The web app did not start: read %LOCALAPPDATA%\MySQLDBAValidator\logs\backend.log.

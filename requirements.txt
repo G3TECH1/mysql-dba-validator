@@ -6,7 +6,10 @@ uvicorn[standard]>=0.24.0,<1.0.0
 # 30.17.0 and 30.21.0 (the release pin); tests/test_review_remediation.py checks them.
 sqlglot>=30.17.0,<31.0.0
 python-dotenv>=1.0.0,<2.0.0
-pymysql>=1.0.0,<2.0.0
+# 1.2.0 is the first release that refuses to continue without TLS when the
+# connector passes its own SSLContext (earlier releases fall back to plaintext if
+# the server does not offer TLS). The release builds pin 1.2.3.
+pymysql>=1.2.0,<2.0.0
 cryptography>=42.0.0,<46.0.0
 pydantic>=2.0.0,<3.0.0
 

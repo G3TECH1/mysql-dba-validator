@@ -373,6 +373,7 @@ def test_no_http_route_issues_pairing_codes(client):
         "/company/targets/{target_id}/validate", "/company/targets/{target_id}/revoke",
         "/company/targets/{target_id}/databases", "/company/targets/{target_id}/explain",
         "/company/targets/{target_id}",
+        "/company/target-requests", "/company/target-requests/confirm",
         "/db/test", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc",
     }
     assert paths <= expected, paths - expected

@@ -54,6 +54,7 @@ The app is never written to. Per-user data lives in:
 
     ~/.local/state/MySQLDBAValidator/
         connector-targets.json   approved company targets (no credentials)
+        trust/                   CA bundle files added from the page
         logs/backend.log         web app log, replaced on each start
 
 (or $XDG_STATE_HOME/MySQLDBAValidator/ if XDG_STATE_HOME is set). MySQL
@@ -79,16 +80,34 @@ evidence it has, and if evidence is missing, why.
 
 OPTIONAL: COMPANY TARGETS THROUGH THE CONNECTOR
 -----------------------------------------------
-Company MySQL targets require the CA certificate bundle that signs the company
-servers. In Terminal:
+Company MySQL connections always use TLS, verified against a CA certificate
+bundle that signs the company servers. Start the Console in Terminal:
 
     "/Applications/MySQL DBA Validator.app/Contents/MacOS/MySQL-DBA-Validator Console" --tls-ca /path/to/company-ca.pem
 
-Without a CA bundle the connector still starts, but every company operation is
-refused. Then, in that Terminal window: "register <id> <host> <port> <name>",
-"approve <id>". In the page: paste the pairing code, choose the target, enter
-your own MySQL login, discover databases, validate. The page can never
-register or approve targets; only this console can.
+--tls-ca is the connector's CA bundle, used by targets registered in this
+Terminal window. Without it the connector still starts, but those targets are
+refused.
+
+Paste the pairing code from Terminal into the page. Then add a target in one of
+two ways; both need the Terminal window:
+- From the page: under "Add a remote connection", enter a name, host name and
+  port, and choose the trusted certificates: the connector CA bundle
+  (--tls-ca) or a CA bundle file. "Windows certificate store" works only on
+  Windows; macOS refuses it (the Keychain is not used). Terminal then shows the
+  request (host, port, resolved addresses, certificates) and a one-time
+  approval code. Check it, then enter the code in the page within 5 minutes.
+- In Terminal: "register <id> <host> <port> <name>", then "approve <id>".
+  These targets use the --tls-ca bundle.
+Then in the page: choose the target, enter your own MySQL login, discover
+databases, validate. The page can only ask for a target; nothing is approved
+without the code shown in Terminal.
+
+A CA bundle must be PEM text ("-----BEGIN CERTIFICATE-----" blocks, CA
+certificates only, no private key, up to 256 KiB). A binary (DER) certificate
+is refused, and renaming it to .pem does not convert it: export the CA
+certificates as PEM, then open the file in a text editor and check that it
+holds only such blocks.
 
 Other options: --registry <file>, --session-ttl <seconds>,
 --allow-origin <origin>, --no-browser. Run it with --help for details.
@@ -103,7 +122,16 @@ TROUBLESHOOTING
   and wait, or stop the Console in its Terminal window), or another program
   uses port 8420 or 8765.
 - The page does not open: browse to http://127.0.0.1:8420 yourself.
-- "cannot load target registry": the registry file is damaged. The program
-  refuses to start rather than overwrite it. Move or fix the file named in the
-  message.
+- "cannot load target registry": the registry file named in the message could
+  not be loaded. The program refuses to start rather than change it. After an
+  upgrade, one cause is a saved target whose host name the current, stricter
+  rules refuse (a non-ASCII name, a last part that does not start with a
+  letter such as db.1corp, or more than 253 characters); the message then ends
+  in invalid_target:targets[N], the entry's position counting from 0. Keep a
+  copy of the file and the trust folder next to it, remove only that entry,
+  start again and add the target again with a name the current rules accept
+  (it needs approval again): the xn-- form of a non-ASCII name, or, when the
+  old name has no valid form, another DNS name or alias that resolves to the
+  same server, if your DNS provides one. Otherwise the file is damaged: move
+  or fix it.
 - The web app did not start: read ~/.local/state/MySQLDBAValidator/logs/backend.log.

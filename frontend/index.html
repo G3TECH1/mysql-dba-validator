@@ -2600,9 +2600,41 @@
 							<button class="secondary" id="pairBtn">Pair connector</button>
 							<button class="secondary" id="unpairBtn" hidden>Unpair</button>
 							<button class="secondary" id="loadTargetsBtn" hidden>Reload approved targets</button>
+							<button class="secondary" id="reapproveBtn" hidden>Request re-approval</button>
 						</div>
 						<p id="pairingStatus" class="status" role="status" style="margin-top:10px">Not paired. Remote
 							targets need a pairing code from the local connector.</p>
+						<div id="addTarget" hidden style="margin-top:14px">
+							<h3 class="subsection-title">Add a remote connection</h3>
+							<p class="hint">The connector window shows your request with a one-time approval code. Check
+								the host, port, addresses and certificates shown there before you enter the code. No
+								password is sent with the request.</p>
+							<div class="fields">
+								<div class="field"><label for="newTargetName">Connection name</label><input
+										id="newTargetName" maxlength="64" autocomplete="off" /></div>
+								<div class="field"><label for="newTargetHost">Host name</label><input id="newTargetHost"
+										autocomplete="off" spellcheck="false" placeholder="db.example.com" /></div>
+								<div class="field"><label for="newTargetPort">Port</label><input id="newTargetPort"
+										type="number" min="1" max="65535" value="3306" inputmode="numeric" /></div>
+								<div class="field"><label for="newTargetTrust">Trusted certificates</label><select
+										id="newTargetTrust">
+										<option value="configured">Connector CA bundle (--tls-ca)</option>
+										<option value="bundle">CA bundle file</option>
+										<option value="system">Windows certificate store (Windows only)</option>
+									</select></div>
+								<div class="field full" id="newTargetCaField" hidden><label for="newTargetCa">CA bundle
+										(PEM certificates only, up to 256 KiB)</label><input id="newTargetCa" type="file"
+										accept=".pem,.crt,.cer" /></div>
+								<div class="field" id="approvalCodeField" hidden><label for="approvalCode">Approval code
+										from the connector window</label><input id="approvalCode" autocomplete="off"
+										spellcheck="false" maxlength="16" placeholder="XXXX-XXXX" /></div>
+							</div>
+							<div class="actions">
+								<button class="secondary" id="requestTargetBtn">Request approval</button>
+								<button class="secondary" id="confirmTargetBtn" hidden>Approve</button>
+							</div>
+							<p id="targetRequestStatus" class="status" role="status"></p>
+						</div>
 					</div>
 				</section>
 
@@ -2687,13 +2719,22 @@
 			// are display-only and never sent anywhere.
 			approvedTargets: [],
 			remoteTarget: null,
+			// target_id selected when the last connector session ended (memory only). It is
+			// offered again after re-pairing if still approved; the login is never kept.
+			rememberedTargetId: null,
+			// Expiry notice timers for the current session, from the connector's expires_in_seconds.
+			sessionTimers: [],
+			// The open target request ({requestId, sessionToken}); memory only, one at a time.
+			targetRequest: null,
 			// Which target/login/session produced the current remote database list. A
 			// database is only sent with a remote validation while all three still match;
 			// the connector re-checks the same binding server-side.
 			discovery: null
 		};
 		const pairingCode = $('pairingCode'), pairBtn = $('pairBtn'), unpairBtn = $('unpairBtn');
-		const targetSelect = $('targetSelect'), loadTargetsBtn = $('loadTargetsBtn');
+		const targetSelect = $('targetSelect'), loadTargetsBtn = $('loadTargetsBtn'), reapproveBtn = $('reapproveBtn');
+		const addTarget = $('addTarget'), newTargetTrust = $('newTargetTrust'), newTargetCa = $('newTargetCa');
+		const approvalCode = $('approvalCode'), requestTargetBtn = $('requestTargetBtn'), confirmTargetBtn = $('confirmTargetBtn');
 
 		// Utility functions
 		function text(value) { return value == null || value === '' ? 'n/a' : String(value) }
@@ -2928,6 +2969,7 @@
 			throw new Error(REMOTE_NOT_AVAILABLE + 'Pair with the local connector first using the pairing code it printed.');
 		}
 
+		const PAIR_AGAIN_GUIDANCE = 'Press Enter in the connector window for a new pairing code, then pair again.';
 		const CONNECTOR_ERROR_MESSAGES = {
 			invalid_pairing_token: 'Pairing code was not accepted. Request a new code from the local connector.',
 			pairing_expired: 'Pairing code has expired. Press Enter in the connector window for a new code.',
@@ -2935,8 +2977,8 @@
 			pairing_rate_limited: 'Too many failed pairing attempts. Wait a minute and try again.',
 			invalid_pairing_request: 'Pairing code format is invalid.',
 			invalid_origin: 'The local connector does not allow this page. Start it with --allow-origin ' + window.location.origin + '.',
-			invalid_session: 'Connector session is no longer valid. Pair again.',
-			session_expired: 'Connector session has expired. Pair again.',
+			invalid_session: 'Connector session is no longer valid. ' + PAIR_AGAIN_GUIDANCE,
+			session_expired: 'Connector session has expired. ' + PAIR_AGAIN_GUIDANCE,
 			insufficient_session_scope: 'This connector session is not allowed to perform that operation.',
 			company_target_not_approved: 'This target is not approved in the local connector.',
 			unknown_company_target: 'This target is not registered in the local connector.',
@@ -2952,16 +2994,187 @@
 			database_discovery_failed: 'The connector could not list databases for this target and login.',
 			target_needs_reapproval: 'This target must be re-approved in the local connector before use.',
 			target_not_approved: 'This target is not approved in the local connector.',
-			dns_identity_mismatch: 'The target host no longer resolves to its approved address. Ask the connector operator to re-approve it.'
+			dns_identity_mismatch: 'The target host no longer resolves to its approved addresses. Ask the connector operator to review the target and re-approve it if appropriate.',
+			dns_resolution_failed: 'The target host name could not be resolved. Check the VPN, DNS and network path to the server.',
+			dns_result_invalid: 'The target host name did not resolve to a usable address. Ask the connector operator to review the target.',
+			unsafe_destination: 'The target host resolved to an address the connector does not allow. Ask the connector operator to review the target.',
+			// Company connection failures. No evidence is collected for any of them.
+			database_connection_failed: 'The connector could not complete a connection to this target. No evidence was collected.',
+			tls_verification_failed: 'The server certificate could not be verified for this host name with the trusted certificates chosen for this target. Ask your administrator to check that trust choice and the server certificate.',
+			tls_handshake_failed: 'A secure (TLS) connection to the server could not be established. Ask your administrator to check the server\'s TLS setup.',
+			tls_not_offered: 'The server did not offer TLS, which company targets require. Ask your administrator.',
+			auth_failed: 'MySQL rejected the login. Check your username and password. Repeated failures can lock the account.',
+			password_expired: 'Your MySQL password has expired. Change it through your organisation\'s normal password-change process, then try again.',
+			account_locked: 'This MySQL account is locked. Contact your database administrator.',
+			host_not_allowed: 'MySQL does not allow this account to connect from this machine. Contact your database administrator.',
+			host_blocked: 'MySQL is blocking connections from this machine after repeated connection errors. Contact your database administrator.',
+			auth_method_unsupported: 'This account uses a MySQL authentication method the validator does not support. Contact your database administrator.',
+			connection_limit_reached: 'MySQL refused the connection because a connection or account limit was reached. Try again later or contact your database administrator.',
+			network_timeout: 'The connection to the target timed out. Check the VPN and network path to the server, then try again.',
+			connection_refused: 'The connection was refused on the approved port. Check that MySQL is listening there, or ask the connector operator.',
+			unreachable: 'The connection to the target failed or was lost. Check the VPN and network path to the server, then try again.',
+			// Adding or re-approving a target from the page.
+			approval_console_unavailable: 'The connector is not running in a terminal, so it cannot show the approval request. Start MySQL-DBA-Validator Console.exe on Windows, MySQL-DBA-Validator Console from Terminal on macOS, or python -m connector in a terminal, and try again.',
+			invalid_target_request: 'The connection details were not accepted. Check the name, host name, port and certificate choice.',
+			invalid_company_target_name: 'Use a connection name of up to 64 characters, without control characters.',
+			invalid_company_target_host: 'Enter a DNS host name in ASCII, such as db.example.com. IP addresses and names in non-ASCII form (use the xn-- form) are not accepted.',
+			invalid_company_target_port: 'Enter a port between 1 and 65535.',
+			local_target_not_allowed_in_company_mode: 'MySQL on this computer does not need the connector: choose Local (this machine).',
+			company_target_exists: 'A connector target with this host name and port already exists. Select it from the Target list.',
+			company_dns_validation_failed: 'The host name could not be resolved. Check the VPN, DNS and network path to the server.',
+			company_target_address_not_allowed: 'The host name resolves to an address the connector does not allow.',
+			tls_ca_not_configured: 'The connector has no CA bundle configured. Choose a CA bundle file (or, on Windows, the Windows certificate store).',
+			trust_policy_unsupported: 'The system certificate store is supported only on Windows. Choose a CA bundle file.',
+			trust_store_unavailable: 'The Windows certificate store could not be loaded. Choose a CA bundle file.',
+			trust_storage_unavailable: 'This connector cannot store CA bundles. Ask the connector operator.',
+			invalid_trust_policy: 'Choose how the server certificate is trusted.',
+			invalid_ca_bundle: 'The CA bundle is not valid PEM certificate data. A binary (DER) certificate must be exported again in PEM (Base-64) form; renaming it is not enough.',
+			ca_bundle_too_large: 'The CA bundle is larger than 256 KiB.',
+			ca_bundle_contains_private_key: 'The file contains a private key. Choose a file with CA certificates only, and keep private keys out of the validator.',
+			ca_bundle_has_no_ca_certificate: 'The file contains no CA certificate. Use the CA bundle that issued the server certificate.',
+			target_request_limit_reached: 'Too many approval requests are open. Wait a few minutes and try again.',
+			company_target_not_reapprovable: 'This target cannot be re-approved from the page. Ask the connector operator.',
+			trust_policy_unavailable: 'The trusted certificates recorded for this target are not available. Ask the connector operator.',
+			approval_rate_limited: 'Too many wrong approval codes. Wait a minute and try again.',
+			target_request_not_found: 'That approval request no longer exists. Request approval again.',
+			approval_code_invalid: 'The approval code is not correct. Copy it exactly from the connector window.',
+			target_request_cancelled: 'The request was cancelled after three wrong codes. Request approval again.',
+			dns_changed_since_request: 'The host name now resolves to different addresses than the connector window showed. Nothing was approved. Request approval again and check the addresses.',
+			trust_bundle_unavailable: 'The CA bundle could not be stored. Nothing was approved.',
+			company_target_changed: 'The target changed while it was being approved. Request approval again.',
+			invalid_target_confirmation: 'Enter the approval code shown in the connector window.',
+			target_registry_unavailable: 'The connector could not save its target list. Nothing was approved.'
 		};
+
+		const MAX_CA_BUNDLE_BYTES = 256 * 1024;
+		const REAPPROVAL_CODES = ['dns_identity_mismatch', 'target_needs_reapproval'];
+
+		function showTargetRequest(open) {
+			$('approvalCodeField').hidden = !open;
+			confirmTargetBtn.hidden = !open;
+			if (!open) {
+				state.targetRequest = null;
+				approvalCode.value = '';
+			}
+		}
+
+		// The page only asks for a target (or re-approval of the selected one). The
+		// connector shows the exact request and a one-time code in its own window; only
+		// that code approves it. No MySQL login is part of the request.
+		async function requestTarget(reapproveTargetId) {
+			const status = $('targetRequestStatus');
+			showTargetRequest(false);
+			try {
+				const sessionToken = await ensureConnectorSession();
+				let body;
+				if (reapproveTargetId) {
+					body = { target_id: reapproveTargetId };
+				} else {
+					body = {
+						display_name: $('newTargetName').value.trim(),
+						host: $('newTargetHost').value.trim(),
+						port: Number($('newTargetPort').value),
+						trust: newTargetTrust.value
+					};
+					if (body.trust === 'bundle') {
+						const file = newTargetCa.files && newTargetCa.files[0];
+						if (!file) throw new Error('Choose the CA bundle file (PEM certificates).');
+						if (file.size > MAX_CA_BUNDLE_BYTES) throw new Error(CONNECTOR_ERROR_MESSAGES.ca_bundle_too_large);
+						body.ca_pem = await file.text();
+					}
+				}
+				requestTargetBtn.disabled = reapproveBtn.disabled = true;
+				const data = await connectorRequest(CONNECTOR_URL + '/company/target-requests', {
+					method: 'POST',
+					headers: connectorHeaders(sessionToken, true),
+					body: JSON.stringify(body)
+				});
+				if (!data || data.status !== 'awaiting_approval' || typeof data.request_id !== 'string')
+					throw new Error('The local connector returned an unexpected response.');
+				state.targetRequest = { requestId: data.request_id, sessionToken: sessionToken };
+				showTargetRequest(true);
+				setStatus(status, 'Check the request in the connector window. If every line is what you asked for, enter its approval code here.', '');
+				approvalCode.focus();
+			} catch (error) {
+				setStatus(status, error.message || 'The request was not accepted.', 'error');
+			} finally {
+				requestTargetBtn.disabled = reapproveBtn.disabled = false;
+			}
+		}
+
+		async function confirmTarget() {
+			const status = $('targetRequestStatus');
+			const pending = state.targetRequest;
+			const code = approvalCode.value.trim();
+			approvalCode.value = '';
+			if (!pending || pending.sessionToken !== state.connectorSessionToken) {
+				showTargetRequest(false);
+				setStatus(status, CONNECTOR_ERROR_MESSAGES.target_request_not_found, 'error');
+				return;
+			}
+			confirmTargetBtn.disabled = true;
+			try {
+				// The code goes in the request body only, never in a URL.
+				const data = await connectorRequest(CONNECTOR_URL + '/company/target-requests/confirm', {
+					method: 'POST',
+					headers: connectorHeaders(pending.sessionToken, true),
+					body: JSON.stringify({ request_id: pending.requestId, approval_code: code })
+				});
+				showTargetRequest(false);
+				reapproveBtn.hidden = true;
+				const approvedId = data && data.target ? data.target.target_id : '';
+				await loadApprovedTargets();
+				if (state.approvedTargets.some(t => t.target_id === approvedId)) {
+					forgetRememberedTarget();
+					// Entering remote mode: a login typed for Local must not be sent to
+					// the new target. Switching between remote targets keeps the login.
+					if (!state.remoteTarget) {
+						username.value = '';
+						password.value = '';
+					}
+					selectTarget(approvedId);
+				}
+				setStatus(status, 'Approved. Enter your MySQL username and password, then use Discover databases to test the connection.', 'success');
+			} catch (error) {
+				if (['target_request_not_found', 'target_request_cancelled', 'dns_changed_since_request', 'company_target_changed', 'company_target_exists'].includes(error.errorCode))
+					showTargetRequest(false);
+				setStatus(status, error.message || 'The approval was not accepted.', 'error');
+			} finally {
+				confirmTargetBtn.disabled = false;
+			}
+		}
+
+		// Session timing comes only from the connector's expires_in_seconds. The page
+		// never renews a session: it warns before expiry and ends it at expiry.
+		const SESSION_EXPIRY_NOTICE_SECONDS = 300;
+		function scheduleSessionExpiryNotice(expiresInSeconds) {
+			const seconds = Number(expiresInSeconds);
+			if (!Number.isFinite(seconds) || seconds <= 0) return;
+			const notice = Math.min(SESSION_EXPIRY_NOTICE_SECONDS, Math.floor(seconds / 2));
+			const remaining = notice < 60 ? 'less than a minute' : 'about ' + Math.round(notice / 60) + ' minute(s)';
+			state.sessionTimers.push(setTimeout(() => setStatus($('pairingStatus'),
+				'Connector session ends in ' + remaining + '. ' + PAIR_AGAIN_GUIDANCE, ''),
+				(seconds - notice) * 1000));
+			state.sessionTimers.push(setTimeout(() => setPaired(null, CONNECTOR_ERROR_MESSAGES.session_expired, 'error'),
+				seconds * 1000));
+		}
 
 		function setPaired(sessionToken, message, kind) {
 			const changed = state.connectorSessionToken !== (sessionToken || null);
 			state.connectorSessionToken = sessionToken || null;
 			unpairBtn.hidden = !state.connectorSessionToken;
 			loadTargetsBtn.hidden = !state.connectorSessionToken;
+			addTarget.hidden = !state.connectorSessionToken;
 			if (changed) {
+				state.sessionTimers.forEach(clearTimeout);
+				state.sessionTimers = [];
+				// An open target request belongs to the session that made it.
+				showTargetRequest(false);
+				reapproveBtn.hidden = true;
 				// Targets and discovered databases belong to one connector session only.
+				// Only the selected target_id is remembered for the next session; the
+				// login is cleared by selectTarget('') as always.
+				if (state.remoteTarget) state.rememberedTargetId = state.remoteTarget.target_id;
 				state.approvedTargets = [];
 				renderTargetOptions();
 				if (state.remoteTarget) selectTarget('');
@@ -2982,8 +3195,11 @@
 					throw new Error('The local connector is not reachable at ' + CONNECTOR_URL + '. Is it running?');
 				}
 				if (error.status === 401 && url !== CONNECTOR_URL + '/pair') {
-					setPaired(null, 'Connector session ended. Pair again to validate remote targets.', 'error');
+					setPaired(null, 'Connector session ended. ' + PAIR_AGAIN_GUIDANCE, 'error');
 				}
+				// A changed address set or a needs-reapproval target: offer the explicit
+				// re-approval request for the selected target (never automatic).
+				if (state.remoteTarget && REAPPROVAL_CODES.includes(error.errorCode)) reapproveBtn.hidden = false;
 				const friendly = CONNECTOR_ERROR_MESSAGES[error.errorCode];
 				const wrapped = new Error(friendly || error.message);
 				wrapped.status = error.status;
@@ -3012,6 +3228,7 @@
 					throw new Error('The local connector returned an unexpected pairing response.');
 				const minutes = Math.max(1, Math.round((Number(data.expires_in_seconds) || 0) / 60));
 				setPaired(data.session_token, 'Paired with the local connector. Session expires in about ' + minutes + ' minute(s).', 'success');
+				scheduleSessionExpiryNotice(data.expires_in_seconds);
 				await loadApprovedTargets();
 			} catch (error) {
 				setPaired(null, error.message || 'Pairing failed.', 'error');
@@ -3024,6 +3241,7 @@
 		async function unpairConnector() {
 			const sessionToken = state.connectorSessionToken;
 			setPaired(null, 'Not paired. Remote targets need a pairing code from the local connector.', '');
+			state.rememberedTargetId = null; // explicit unpair forgets the target too
 			if (!sessionToken) return;
 			try {
 				await connectorRequest(CONNECTOR_URL + '/unpair', { method: 'POST', headers: connectorHeaders(sessionToken, false) });
@@ -3055,7 +3273,17 @@
 				selectTarget('');
 			else if (state.remoteTarget)
 				targetSelect.value = state.remoteTarget.target_id;
+			else if (state.rememberedTargetId) {
+				// After re-pairing: reselect the previous target only if this fresh list still
+				// approves it. Login and databases are not restored; discover again.
+				const remembered = state.rememberedTargetId;
+				state.rememberedTargetId = null;
+				if (state.approvedTargets.some(t => t.target_id === remembered)) selectTarget(remembered);
+			}
 		}
+
+		// An explicit choice (another target or Local) or local input replaces any remembered target.
+		function forgetRememberedTarget() { state.rememberedTargetId = null }
 
 		function renderTargetOptions() {
 			targetSelect.replaceChildren(new Option('Local (this machine)', ''));
@@ -3069,6 +3297,7 @@
 		function selectTarget(targetId) {
 			const target = state.approvedTargets.find(t => t.target_id === targetId) || null;
 			const wasRemote = Boolean(state.remoteTarget);
+			reapproveBtn.hidden = true; // offered again only by an error for the new selection
 			state.remoteTarget = target;
 			targetSelect.value = target ? target.target_id : '';
 			host.readOnly = port.readOnly = Boolean(target);
@@ -4085,6 +4314,10 @@
 
 		// Event listeners
 		[host, port, username, password].forEach(input => input.addEventListener('input', syncCredentials));
+		// Typing while in Local mode means local work: never switch it to a company target.
+		[host, port, username, password].forEach(input => input.addEventListener('input', () => {
+			if (!state.remoteTarget) forgetRememberedTarget();
+		}));
 		testBtn.addEventListener('click', testConnection);
 		discoverBtn.addEventListener('click', discoverDatabases);
 		validateBtn.addEventListener('click', validateSql);
@@ -4132,7 +4365,11 @@
 		pairBtn.addEventListener('click', pairConnector);
 		unpairBtn.addEventListener('click', unpairConnector);
 		loadTargetsBtn.addEventListener('click', loadApprovedTargets);
-		targetSelect.addEventListener('change', () => selectTarget(targetSelect.value));
+		targetSelect.addEventListener('change', () => { forgetRememberedTarget(); selectTarget(targetSelect.value); });
+		requestTargetBtn.addEventListener('click', () => requestTarget(''));
+		confirmTargetBtn.addEventListener('click', confirmTarget);
+		reapproveBtn.addEventListener('click', () => { if (state.remoteTarget) requestTarget(state.remoteTarget.target_id); });
+		newTargetTrust.addEventListener('change', () => { $('newTargetCaField').hidden = newTargetTrust.value !== 'bundle'; });
 		database.addEventListener('change', () => {
 			state.selectedDatabase = database.value;
 			updateContext();

@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import socket
+import ssl
 import threading
 from pathlib import Path
 
@@ -751,8 +752,9 @@ def test_approved_target_validation_uses_registry_destination_and_tls(tmp_path, 
     used = fake_network["pymysql"][0]
     assert used["host"] == HOST and used["port"] == 3306
     assert used["user"] == USER and used["password"] == SECRET
-    assert used["ssl"]["ca"] == str(ca_file.absolute())
-    assert used["ssl"]["check_hostname"] is True
+    # A verified SSLContext loaded from the configured --tls-ca bundle.
+    assert used["ssl"].check_hostname is True and used["ssl"].verify_mode == ssl.CERT_REQUIRED
+    assert [cert["subject"] for cert in used["ssl"].get_ca_certs()] == [((("commonName", "B2 Test CA"),),)]
 
 
 def test_dns_change_after_approval_fails_closed(tmp_path, dns, ca_file, fake_network):
