@@ -229,7 +229,8 @@ v0.5.0 no longer does (see
   `CRITICAL` with `HIGH` confidence. `HIGH` for DDL, DCL, transaction control,
   `SELECT`, and writes whose row scope is established (`all_rows`, or
   `at_most_one_row` from table metadata); `LIMITED` for other writes,
-  `INSERT`, `REPLACE` and `CALL`; `LOW` when the SQL could not be parsed (a
+  `INSERT`, `REPLACE`, `CALL`, and a `SELECT` with a locking clause or a call
+  outside the reviewed function list (also `MEDIUM` at least); `LOW` when the SQL could not be parsed (a
   statement the parser cannot read in full is not analysed). A referenced table that
   metadata did not find caps it at `LIMITED`. Missing or failed evidence never
   raises it. Batch `overall_confidence` is the lowest statement confidence.

@@ -411,8 +411,8 @@ penalised. CRITICAL is never reduced.
 
 | Level | Observable meaning | Cases |
 | --- | --- | --- |
-| HIGH | The facts that decide the risk are established | DDL, DCL, transaction control, `SELECT`; `UPDATE`/`DELETE` with `all_rows` or verified `at_most_one_row` |
-| LIMITED | Sound for what is known, but a deciding fact (usually row scope) is not established | Other writes; `INSERT`, `REPLACE`, `CALL`; any statement whose referenced table metadata did not find |
+| HIGH | The facts that decide the risk are established | DDL, DCL, transaction control, `SELECT` (other than below); `UPDATE`/`DELETE` with `all_rows` or verified `at_most_one_row` |
+| LIMITED | Sound for what is known, but a deciding fact (usually row scope) is not established | Other writes; `INSERT`, `REPLACE`, `CALL`; a `SELECT` with a locking clause (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`) or a call outside the reviewed function list (section 12), also MEDIUM at least; any statement whose referenced table metadata did not find |
 | LOW | The analysed statement may not be the submitted one, or could not be analysed | Parse error; lossy parse |
 
 Rules (`risk_engine.static_confidence`, `main.final_confidence`):
@@ -737,8 +737,9 @@ repository, so none was run.
   2026-10-21); not yet observed on a server.
 - **Statements the parser cannot read in full (batch contract, 10.6):** such a
   statement is not analysed (`unreadable`, CRITICAL, LOW), including valid
-  MySQL the parser does not fully support (`SELECT … INTO OUTFILE`, a trailing
-  `INTO @a`), which is therefore refused rather than assessed. The permissive
+  MySQL the parser does not fully support (`SELECT … INTO` in any position:
+  before `FROM` sqlglot reads the target as a new table), which is therefore
+  refused rather than assessed. The permissive
   fallback, which scored a partial reading and could show LOW 0 for text with a
   dropped write (`SELECT 1 DROP TABLE t`), was removed after v0.6.0. A
   statement read in full is still not proof that MySQL accepts it: the parser

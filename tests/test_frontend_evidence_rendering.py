@@ -176,6 +176,8 @@ def build_fixtures() -> dict:
         "metadata_failed": local_fixture("SELECT * FROM users WHERE status = 'old'",
                                          FakeMySQL(metadata_error=mysql_error(1142, "SELECT command denied"))),
         "select_into": local_fixture("SELECT * INTO @a FROM users"),
+        # A locking read: analysed (MEDIUM, LIMITED), never planned.
+        "locking_read": local_fixture("SELECT * FROM users WHERE id = 1 FOR UPDATE"),
         "trailing_select_into": local_fixture("SELECT * FROM users INTO OUTFILE '/tmp/x'"),
         "not_applicable": local_fixture("SELECT 1"),
         "connected_unavailable": local_fixture("UPDATE users SET active = 0 WHERE id = 1",
@@ -363,8 +365,8 @@ def test_metadata_failure_is_named_and_partial(rendered):
     assert "Partial evidence" in out["metadata_failed"]["summary"]
 
 
-@pytest.mark.parametrize("name", ["select_into"])
-def test_select_into_is_explained_as_not_eligible(rendered, name):
+@pytest.mark.parametrize("name", ["locking_read"])
+def test_a_select_refused_by_the_plan_gate_is_explained_as_not_eligible(rendered, name):
     fixtures, out = rendered
     assert fixtures[name]["statements"][0]["evidence"]["plan"]["state"] == "not_eligible"
     view = out[name]["statements"][0]
@@ -372,6 +374,29 @@ def test_select_into_is_explained_as_not_eligible(rendered, name):
     assert not any("this statement type" in line for line in view["evidence"])
     assert view["planGrids"] == 0
     assert out[name]["mode"] == "Static + database metadata"
+
+
+def test_a_locking_read_is_shown_as_medium_limited_and_never_read_only(rendered):
+    from backend.risk_engine import LOCKING_READ_REASON
+
+    fixtures, out = rendered
+    statement = fixtures["locking_read"]["statements"][0]
+    assert (statement["risk_level"], statement["confidence"]) == ("MEDIUM", "LIMITED")
+    view = out["locking_read"]["statements"][0]
+    assert view["confidence"] == "LIMITED"
+    assert LOCKING_READ_REASON in view["text"]
+    assert "Read-only or no data mutation detected." not in view["text"]
+
+
+def test_select_into_is_shown_as_submitted_and_not_analysed(rendered):
+    fixtures, out = rendered
+    statement = fixtures["select_into"]["statements"][0]
+    assert statement["analysis_status"] == "unreadable"
+    assert statement["sql"] == "SELECT * INTO @a FROM users"
+    view = out["select_into"]["statements"][0]
+    assert "SELECT * INTO @a FROM users" in view["text"] and "CREATE TABLE" not in view["text"]
+    assert view["confidence"] == "LOW"
+    assert "Incomplete analysis" in out["select_into"]["overview"]
 
 
 def test_not_applicable_is_connected_not_unavailable(rendered):

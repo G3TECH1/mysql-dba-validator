@@ -89,8 +89,8 @@ How the components and request flows fit together is described in
   (the per-statement `evidence` object). Missing or failed evidence never
   lowers a risk score and never changes confidence. A plan is reported only
   for a statement the validator parsed faithfully: a `SELECT … INTO` in any
-  form, or a `SELECT` the parser could only read permissively, gets no plan
-  request and is reported as not eligible, locally and through the connector.
+  form is not analysed and gets no plan request, locally and through the
+  connector.
 - API responses, including request-validation errors, do not include submitted
   credential values.
 
