@@ -324,8 +324,9 @@ def test_served_page_sends_login_per_request_to_connector_only():
     assert "/api/" not in remote
     for forbidden in ("sessionStorage", "document.cookie", "URLSearchParams"):
         assert forbidden not in html
-    # localStorage holds only the appearance preference (see test_frontend_served_page).
-    uses = re.findall(r"localStorage\.(getItem|setItem)\('mdv-theme'", html)
+    # localStorage holds only the appearance preference and a dismissed update's version
+    # (see test_frontend_served_page).
+    uses = re.findall(r"localStorage\.(getItem|setItem)\('(mdv-theme|mdv-update-dismissed)'", html)
     assert html.count("localStorage") == len(uses)
 
 

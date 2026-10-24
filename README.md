@@ -62,8 +62,11 @@ database connected, so the result is static analysis only.*
   (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`), or one that calls a
   function outside the validator's reviewed list of MySQL built-ins (a stored
   function, `SLEEP`, `GET_LOCK`, `LOAD_FILE`, ...), is reported as at least
-  `MEDIUM` with `LIMITED` confidence. The validator cannot see the transaction
-  it runs in or what a stored function does.
+  `MEDIUM` with `LIMITED` confidence. This includes any part of a `UNION`,
+  `INTERSECT` or `EXCEPT`, and the call (not the locking clause) in a
+  `SELECT` that a plain `EXPLAIN` plans, because MySQL can evaluate functions
+  while planning. The validator cannot see the transaction it runs in or what
+  a stored function does.
 - **Executable comments are refused.** MySQL runs the contents of executable
   comments (`/*! ... */`, `/*!50000 ... */`) as SQL, so input containing one
   is refused (`executable_comment_not_supported`) rather than assessed. This
@@ -142,6 +145,14 @@ unzip it, and move `MySQL DBA Validator.app` to Applications. macOS blocks the
 first launch because the app is not notarized; the
 [release notes](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0)
 explain how to open it.
+
+**Update notice.** When a newer official release exists, the page shows a
+small notice with a link to its release notes; you can dismiss it. Nothing
+is downloaded or installed. To check, the app asks GitHub once per start for
+the latest release: GitHub sees your IP address and the installed version,
+and no SQL, login or connection details are sent. Set
+`MDV_UPDATE_CHECK=off` to turn it off; see
+[SECURITY.md](SECURITY.md#security-model-in-brief).
 
 ## How it works
 

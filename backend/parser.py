@@ -688,7 +688,11 @@ def _non_call_words(expr: exp.Expression) -> Counter:
     - a table's partition selection (FROM t PARTITION (p0));
     - JSON_TABLE(...) and its COLUMNS (...) clauses: MySQL's only table function, a
       built-in (stored and loadable functions return a single value, so none is a table);
-    - a full-text search, MATCH (...) AGAINST (...).
+    - a full-text search, MATCH (...) AGAINST (...);
+    - a set operation between parenthesised query blocks, (SELECT ...) INTERSECT (...) or
+      EXCEPT (...) (reserved words; UNION ( is already on the reviewed syntax list);
+    - the keyword of an EXPLAIN of a parenthesised query, EXPLAIN / DESCRIBE / DESC
+      [ANALYZE] (SELECT ...) (all reserved words, so none can be a function name).
     """
     words: Counter = Counter()
     for alias in expr.find_all(exp.TableAlias):
@@ -700,6 +704,11 @@ def _non_call_words(expr: exp.Expression) -> Counter:
     searches = sum(1 for _ in expr.find_all(exp.MatchAgainst))
     words["MATCH"] += searches
     words["AGAINST"] += searches
+    words["INTERSECT"] += sum(1 for _ in expr.find_all(exp.Intersect))
+    words["EXCEPT"] += sum(1 for _ in expr.find_all(exp.Except))
+    explains = sum(1 for _ in expr.find_all(exp.Describe))
+    for word in ("EXPLAIN", "DESCRIBE", "DESC", "ANALYZE"):
+        words[word] += explains
     return words
 
 

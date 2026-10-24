@@ -80,6 +80,12 @@ section). The suite covers, among others:
 - **Page and packaging:** `test_frontend_served_page.py`,
   `test_frontend_evidence_rendering.py` (real Chrome; skipped if Chrome is not
   installed), `test_heartbeat.py`, `test_release_packaging.py`.
+- **Update notice:** `test_update_check.py`: version comparison, every
+  failure path (HTTP 403/404/429, offline, timeout, TLS, malformed or
+  unexpected JSON, a non-official release page), the exact request, caching,
+  the off switch, origin protection, an unchanged CSP, and the banner in real
+  Chrome (skipped if Chrome is not installed). GitHub is never contacted: the
+  network is faked.
 
 `.github/workflows/ci.yml` runs the suite and `pip check` on GitHub-hosted
 Windows and macOS (Apple Silicon) runners, Python 3.14, for every pull request
@@ -557,6 +563,11 @@ section 2); no wider Performance Schema grant is to be used.
 - The positive M1 and M2 adjustments against a live database (since v0.5.0 they
   need an `UPDATE`/`DELETE` plan, which is no longer requested).
 - Every live-server check of the evidence contract revision (below).
+- The update check against the real GitHub API from a running or packaged
+  app (only faked responses are tested). On macOS the packaged app may have no
+  CA certificates for Python to verify GitHub with, in which case the check is
+  always unavailable (it never falls back to an unverified connection); not
+  yet checked on a Mac.
 - Platforms other than Windows x64 on a real machine. The macOS (Apple
   Silicon) unsigned zips (v0.4.1, v0.5.0, v0.5.1) have been tested only in CI; see below.
 

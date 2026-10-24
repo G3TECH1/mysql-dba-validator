@@ -412,7 +412,7 @@ penalised. CRITICAL is never reduced.
 | Level | Observable meaning | Cases |
 | --- | --- | --- |
 | HIGH | The facts that decide the risk are established | DDL, DCL, transaction control, `SELECT` (other than below); `UPDATE`/`DELETE` with `all_rows` or verified `at_most_one_row` |
-| LIMITED | Sound for what is known, but a deciding fact (usually row scope) is not established | Other writes; `INSERT`, `REPLACE`, `CALL`; a `SELECT` with a locking clause (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`) or a call outside the reviewed function list (section 12), also MEDIUM at least; any statement whose referenced table metadata did not find |
+| LIMITED | Sound for what is known, but a deciding fact (usually row scope) is not established | Other writes; `INSERT`, `REPLACE`, `CALL`; a `SELECT` with a locking clause (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`) or a call outside the reviewed function list (section 12), in any query block of a `UNION`/`INTERSECT`/`EXCEPT` or parenthesised query, also MEDIUM at least; a plain `EXPLAIN` of a `SELECT` with such a call (section 11: `EXPLAIN` can evaluate functions; no locking finding, as `EXPLAIN` takes no locks), also MEDIUM at least; any statement whose referenced table metadata did not find |
 | LOW | The analysed statement may not be the submitted one, or could not be analysed | Parse error; lossy parse |
 
 Rules (`risk_engine.static_confidence`, `main.final_confidence`):

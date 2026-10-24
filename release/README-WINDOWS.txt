@@ -55,6 +55,14 @@ MySQL usernames and passwords typed into the page are used for that request
 only. They are not written to disk, the target registry, the logs or browser
 storage.
 
+Update notice: once per start, the web app asks GitHub
+(api.github.com) for the latest official release, and the page shows a
+dismissible notice with a link to its release notes when it is newer. GitHub
+sees your IP address and the installed version; no SQL, login or connection
+details are sent, and nothing is downloaded or installed. To turn it off, add
+the line MDV_UPDATE_CHECK=off to a file named .env in the folder above (or
+set it as an environment variable).
+
 
 LOCAL MYSQL EVIDENCE
 --------------------
