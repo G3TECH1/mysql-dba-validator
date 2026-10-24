@@ -75,8 +75,10 @@ def test_limit_with_a_filter_scores_the_scan_and_the_missing_index_together(monk
 
 def test_an_unreadable_where_is_not_assessed_not_reported_as_absent(monkeypatch):
     s = statement_for(monkeypatch, "UPDATE users SET WHERE", explain=LARGE_SCAN)
-    assert s["has_where"] is True
-    assert s["filter_index"] == {"state": "not_assessed"}
+    # The parser cannot read it in full: not analysed, so its WHERE is unknown, not absent.
+    assert s["analysis_status"] == "unreadable" and s["has_where"] is not False
+    # As for every statement that is not analysed; never "no_filter" (no WHERE).
+    assert s["filter_index"] == {"state": "not_applicable"}
 
 
 def test_a_small_full_scan_stays_low(monkeypatch):

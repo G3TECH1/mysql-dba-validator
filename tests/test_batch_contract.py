@@ -300,15 +300,16 @@ def test_minus_sign_rewrite_leaves_strings_identifiers_and_comments_alone():
     assert only("UPDATE t SET note = 'a--b' WHERE id = 1")["sql"] == "UPDATE t SET note = 'a--b' WHERE id = 1"
 
 
-@pytest.mark.parametrize("sql", [
+@pytest.mark.parametrize("sql, status", [
     # A line of dashes is minus signs to MySQL, which rejects it; sqlglot cannot write
     # back what it reads there, and that was an HTTP 500 (also with the spaces typed).
-    "----------\nSELECT id FROM t WHERE id = 1",
-    "- -",
-    "SELECT - - - - FROM t",
+    # A statement starting with "-" does not start with a statement keyword: not valid MySQL.
+    ("----------\nSELECT id FROM t WHERE id = 1", "invalid"),
+    ("- -", "invalid"),
+    ("SELECT - - - - FROM t", "unreadable"),
 ])
-def test_minus_signs_the_parser_cannot_read_are_not_analysed(sql):
-    assert_not_analysed(only(sql), "unreadable")
+def test_minus_signs_the_parser_cannot_read_are_not_analysed(sql, status):
+    assert_not_analysed(only(sql), status)
 
 
 def test_a_write_after_a_line_of_dashes_is_never_reported_as_low_risk():

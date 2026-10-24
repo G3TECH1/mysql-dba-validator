@@ -229,8 +229,8 @@ v0.5.0 no longer does (see
   `CRITICAL` with `HIGH` confidence. `HIGH` for DDL, DCL, transaction control,
   `SELECT`, and writes whose row scope is established (`all_rows`, or
   `at_most_one_row` from table metadata); `LIMITED` for other writes,
-  `INSERT`, `REPLACE` and `CALL`; `LOW` when the SQL could not be parsed or
-  could only be read partly (`analysis_text_differs`). A referenced table that
+  `INSERT`, `REPLACE` and `CALL`; `LOW` when the SQL could not be parsed (a
+  statement the parser cannot read in full is not analysed). A referenced table that
   metadata did not find caps it at `LIMITED`. Missing or failed evidence never
   raises it. Batch `overall_confidence` is the lowest statement confidence.
   Computed in one place (`risk_engine.static_confidence`, capped in
@@ -272,7 +272,7 @@ Each statement result also carries (since v0.5.0):
 | --- | --- |
 | `scope` | `{basis, source, table, index, columns, factor}`: what is established about the rows an `UPDATE`/`DELETE` matches (see Risk scoring). `source` is `sql` for `all_rows`, `table_metadata` for `at_most_one_row`, otherwise `null`; `factor` is the score credit, if any |
 | `confidence` / `static_confidence` | The final and the SQL-only confidence |
-| `analysis_text_differs` | `true` when the SQL could only be read partly: the analysed text may differ from the submitted text (confidence `LOW`) |
+| `analysis_text_differs` | Kept for compatibility and now always `false`: a statement the parser cannot read in full is not analysed (`analysis_status` `unreadable` or `invalid`) rather than scored from a partial reading |
 | `v2_assessment` | Its `overall_score`, `risk_level` and `confidence` equal the statement's (they were placeholders, `0` / `UNKNOWN`, in v0.4.1 and earlier); its suggested checks are guidance, never SQL built from the submitted text |
 
 The batch adds `overall_confidence`, the lowest statement confidence (`null`

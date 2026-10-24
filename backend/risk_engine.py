@@ -335,7 +335,7 @@ def score_statement(
             facts=facts,
             score=100,
             risk_level="CRITICAL",
-            confidence="HIGH",
+            confidence=static_confidence(facts),
             factors=factors + [
                 ScoreFactor(
                     f"{statement_type} is classified as CRITICAL",

@@ -187,9 +187,9 @@ class StatementFacts:
     # UNREADABLE; parse_error is then set and says what was found).
     analysis_status: str = ANALYSED
 
-    # True when the script only parsed with the permissive fallback, which can drop
-    # tokens (for example a trailing SELECT ... INTO): raw_sql may then not be the
-    # submitted statement. Set for every statement of that script.
+    # True when raw_sql may not be the submitted statement (the analysed text differs).
+    # parse_sql never sets it: a statement that does not parse strictly is not analysed
+    # (UNREADABLE) rather than read permissively. Reported as analysis_text_differs.
     lossy_parse: bool = False
 
 
@@ -904,13 +904,57 @@ def _source_text(sql: str, chunk: Optional[list[Token]]) -> Optional[str]:
     return sql[chunk[0].start:chunk[-1].end + 1]
 
 
+def _strict_error(error: Exception) -> str:
+    """A parse error's description and position, without the highlighted SQL excerpt."""
+    details = getattr(error, "errors", None)
+    if details and details[0].get("description"):
+        first = details[0]
+        return f"{first['description']} (line {first.get('line')}, column {first.get('col')})"
+    return str(error).splitlines()[0] if str(error) else "the parser could not read this statement"
+
+
+def _parse_each_statement(sql: str, unreadable: dict[int, str]) -> Optional[list]:
+    """Each statement of a script that did not parse strictly, parsed strictly on its own.
+
+    One entry per chunk, split exactly as sqlglot splits a script (statement_chunks):
+    the statement; None for an empty or comment-only chunk; or None, with the reason
+    recorded in `unreadable`, for a statement whose text does not parse strictly as one
+    statement. Returns None when the statements cannot be attributed reliably: the
+    script cannot be tokenized, or every statement parses on its own, so the script's
+    own failure is not explained by any one statement.
+    """
+    chunks = statement_chunks(sql)
+    if chunks is None:
+        return None
+    expressions: list = []
+    for index, chunk in enumerate(chunks):
+        if not any(token.token_type != TokenType.SEMICOLON for token in chunk):
+            expressions.append(None)
+            continue
+        try:
+            parsed = sqlglot.parse(_source_text(sql, chunk), read=DIALECT,
+                                   error_level=sqlglot.ErrorLevel.RAISE)
+        except Exception as error:
+            unreadable[index] = _strict_error(error)
+            expressions.append(None)
+            continue
+        if len(parsed) != 1 or parsed[0] is None:
+            unreadable[index] = "the parser could not read this statement"
+            expressions.append(None)
+            continue
+        expressions.append(parsed[0])
+    return expressions if unreadable else None
+
+
 def parse_sql(raw_sql: str) -> list[StatementFacts]:
     """
     Parse a possibly multi-statement MySQL script into StatementFacts.
 
-    If strict parsing fails, a permissive second attempt is made so
-    the validator can still surface useful information instead of
-    immediately failing the entire request.
+    Only a strict parse is ever analysed. If the script does not parse strictly, each
+    statement's own text is parsed strictly on its own: a statement that does not is
+    reported as not analysed (never scored from the part the parser could read), and
+    the others are analysed as usual. When the statements cannot be attributed to
+    their text reliably, the whole script is one unreadable result.
     """
 
     # "--" that MySQL reads as two minus signs must not be read as a comment.
@@ -919,7 +963,7 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
     if not raw_sql:
         return []
 
-    lossy_parse = False
+    unreadable: dict[int, str] = {}
     try:
         expressions = sqlglot.parse(
             raw_sql,
@@ -928,16 +972,8 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
         )
 
     except Exception as strict_error:
-
-        try:
-            expressions = sqlglot.parse(
-                raw_sql,
-                read=DIALECT,
-                error_level=sqlglot.ErrorLevel.IGNORE,
-            )
-            lossy_parse = True
-
-        except Exception:
+        expressions = _parse_each_statement(raw_sql, unreadable)
+        if expressions is None:
             facts = StatementFacts(
                 raw_sql=raw_sql,
                 index=0,
@@ -958,6 +994,21 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
         chunks = None  # the source text cannot be attributed to the parsed statements
 
     for index, expr in enumerate(expressions):
+
+        if index in unreadable:
+            # Did not parse strictly on its own: not analysed, shown as submitted.
+            chunk = chunks[index] if chunks is not None else None
+            facts = StatementFacts(
+                raw_sql=_source_text(raw_sql, chunk) or raw_sql,
+                index=index,
+                parse_error=unreadable[index],
+                analysis_status=UNREADABLE,
+            )
+            not_analysed = _not_analysed(chunk, None)
+            if not_analysed is not None:
+                facts.analysis_status, facts.statement_type, facts.parse_error = not_analysed
+            facts_list.append(facts)
+            continue
 
         # An empty or comment-only fragment (";;", or a comment before ";") is not a statement.
         if expr is None or isinstance(expr, exp.Semicolon):
@@ -987,7 +1038,6 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
             index=index,
             statement_type=statement_type,
             category=category,
-            lossy_parse=lossy_parse,
             source_call_names=source_names[index],
         )
 

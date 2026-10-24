@@ -49,12 +49,15 @@ database connected, so the result is static analysis only.*
 
 - **Risk and confidence are assessments, not guarantees.** Review the SQL
   yourself before running it.
-- **Partly read statements:** if the parser can read a statement only partly,
-  it is scored from what was read, with `LOW` confidence and a warning. A
-  clause the parser dropped is not assessed. A partly read statement can show
-  `LOW` risk even when the dropped text contained a write, and a partly read
-  write can show `MEDIUM` where a full reading might give `HIGH` or
-  `CRITICAL`.
+- **Statements the parser cannot read in full are not analysed.** Each
+  statement is analysed only when the parser reads all of its text. Otherwise
+  it is reported as not analysed (`CRITICAL`, `LOW` confidence, shown as
+  submitted) and the review is marked incomplete; the other statements are
+  still analysed. This includes valid MySQL the parser does not fully support,
+  such as `SELECT ... INTO OUTFILE` or `INTO @var` at the end of a `SELECT`.
+  When the statements cannot be told apart reliably (for example an
+  unterminated string), the whole input is one unreadable result. A statement
+  the parser reads in full is not proof that MySQL accepts it.
 - **Executable comments are refused.** MySQL runs the contents of executable
   comments (`/*! ... */`, `/*!50000 ... */`) as SQL, so input containing one
   is refused (`executable_comment_not_supported`) rather than assessed. This
