@@ -209,12 +209,14 @@ def test_installed_sqlglot_regenerates_quotes_by_doubling():
 @pytest.mark.parametrize("sql", ["SELECT * FROM t INTO @v", "SELECT * FROM t PROCEDURE ANALYSE()"])
 def test_collector_refuses_partly_read_selects_itself(sql):
     evidence, sent = plan_requests(sql)
-    assert sent == [] and evidence.error == PLAN_NOT_ELIGIBLE
-    # Also when handed the regenerated text plus the submitted statement's facts.
+    assert sent == [] and evidence.available is False
+    # The parser cannot read these in full: not analysed, kept as submitted, never a SELECT.
     submitted = parse_sql(sql)[0]
-    assert submitted.lossy_parse
+    assert submitted.analysis_status == "unreadable" and not submitted.lossy_parse
+    assert submitted.raw_sql == sql and submitted.statement_type == "UNKNOWN"
+    # Also when handed the submitted text plus the statement's facts.
     evidence, sent = plan_requests(submitted.raw_sql, source_facts=submitted)
-    assert sent == [] and evidence.error == PLAN_NOT_ELIGIBLE
+    assert sent == [] and evidence.available is False
 
 
 @pytest.mark.parametrize("sql", ["SELECT * FROM users INTO @v", "SELECT * FROM users PROCEDURE ANALYSE()",
@@ -224,7 +226,12 @@ def test_api_never_plans_partly_read_or_unreviewed_selects(mysql, sql):
     assert response.status_code == 200
     assert not [s for s in mysql.executed if s.startswith("EXPLAIN")]
     statement = response.json()["statements"][0]
-    assert statement["evidence"]["plan"]["state"] == "not_eligible"
+    if statement["analysis_status"] == "analysed":
+        assert statement["evidence"]["plan"]["state"] == "not_eligible"
+    else:
+        # Read only partly: not analysed (CRITICAL, LOW) and never planned.
+        assert (statement["risk_level"], statement["confidence"]) == ("CRITICAL", "LOW")
+        assert statement["evidence"]["plan"]["state"] != "collected"
 
 
 # ---------------------------------------------------------------- M1: read-only read-back

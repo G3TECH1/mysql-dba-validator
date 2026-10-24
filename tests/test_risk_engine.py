@@ -1,5 +1,7 @@
+import pytest
+
 from backend.parser import parse_sql
-from backend.risk_engine import score_batch
+from backend.risk_engine import score_batch, score_statement, static_confidence
 
 
 def report(sql: str):
@@ -54,6 +56,17 @@ def test_drop_is_critical():
 def test_truncate_is_critical():
     r = report("TRUNCATE TABLE users;")
     assert r.risk_level == "CRITICAL"
+
+
+@pytest.mark.parametrize("sql", ["DROP TABLE users;", "TRUNCATE TABLE users;"])
+def test_drop_and_truncate_confidence_follows_static_confidence(sql):
+    facts = parse_sql(sql)[0]
+    assert score_statement(facts, 1).confidence == static_confidence(facts) == "HIGH"
+    # Facts the analysed text may not match (the one confidence rule) are LOW, even for DROP.
+    facts.lossy_parse = True
+    report = score_statement(facts, 1)
+    assert report.confidence == static_confidence(facts) == "LOW"
+    assert report.risk_level == "CRITICAL"
 
 
 def test_ddl_does_not_get_transaction_wrapping_advice():

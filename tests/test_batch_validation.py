@@ -9,6 +9,7 @@ quoted semicolons, duplicates and malformed SQL are handled.
 from __future__ import annotations
 
 import pytest
+import sqlglot
 from fastapi.testclient import TestClient
 
 from backend.main import MAX_STATEMENTS, app
@@ -127,14 +128,106 @@ def test_one_malformed_statement_keeps_the_others_and_lowers_batch_confidence():
     types = [s["statement_type"] for s in data["statements"]]
     assert types == ["SELECT", "UNKNOWN", "DELETE"]
     assert data["overall_risk_level"] == "CRITICAL" and data["overall_confidence"] == "LOW"
-    # The other statements were only read partly (the parser fell back): LOW confidence.
-    assert all(s["confidence"] == "LOW" for s in data["statements"])
+    # The other statements were each read in full on their own: their own confidence.
+    assert [s["confidence"] for s in data["statements"]] == ["HIGH", "LOW", "LIMITED"]
+    assert not any(s["analysis_text_differs"] for s in data["statements"])
 
 
 def test_an_empty_parenthesised_where_does_not_crash():
     # Regression: an AttributeError in the predicate classifier returned HTTP 500.
     statement = validate("SELECT 1 FROM t WHERE (((")["statements"][0]
     assert statement["confidence"] == "LOW"
+
+
+# Completeness: a statement is analysed only when the strict parser read all of its text.
+# Text the parser cannot read is never dropped while the rest is scored as the statement.
+
+def strictly_readable(sql: str) -> bool:
+    try:
+        sqlglot.parse(sql, read="mysql", error_level=sqlglot.ErrorLevel.RAISE)
+    except Exception:
+        return False
+    return True
+
+
+def assert_not_analysed(statement: dict, submitted: str):
+    assert statement["analysis_status"] in ("invalid", "unreadable")
+    assert statement["parse_error"]
+    # The submitted text, not the parser's reading of it.
+    assert statement["sql"] == submitted and statement["analysis_text_differs"] is False
+    assert (statement["score"], statement["risk_level"], statement["confidence"]) == (100, "CRITICAL", "LOW")
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT 1 DROP TABLE t",                          # a missing ";" before a write
+    "SELECT * FROM orders WHERE id = 1 DELETE FROM orders",
+    "SELECT * FROM orders WHERE id = 1 ) DELETE FROM orders",
+    "DELETE FROM orders WHERE",                       # truncated
+    "DELETE FROM orders WHERE id = 5 OR",
+    "UPDATE orders SET status = 'x' WHERE id IN (1, 2",
+])
+def test_sql_that_cannot_be_read_in_full_is_not_analysed(sql):
+    data = validate(sql)
+    assert data["statement_count"] == 1
+    assert_not_analysed(data["statements"][0], sql)
+    assert (data["overall_score"], data["overall_risk_level"], data["overall_confidence"]) == (100, "CRITICAL", "LOW")
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM orders INTO OUTFILE '/tmp/x'",     # writes a file on the server host
+    "SELECT id FROM orders WHERE id = 1 INTO @a",
+    "LOAD DATA INFILE '/tmp/x' REPLACE INTO TABLE orders",
+    "DROP TABLE IF EXISTS a, b",
+])
+def test_valid_mysql_the_parser_reads_only_partly_is_not_analysed(sql):
+    # Valid MySQL that this sqlglot cannot read in full: never scored from the part it read
+    # (a SELECT without its INTO OUTFILE, a DROP of only the first table).
+    statement = validate(sql)["statements"][0]
+    if strictly_readable(sql):
+        # A newer sqlglot may read it in full; it is then analysed as written.
+        assert statement["analysis_status"] == "analysed" and statement["analysis_text_differs"] is False
+        if sql.startswith("DROP TABLE"):
+            # Every target is named, never only the first (sqlglot 30.21.0 reads this in full).
+            assert statement["tables"] == ["a", "b"]
+    else:
+        assert_not_analysed(statement, sql)
+
+
+GOOD = ["SELECT * FROM orders WHERE id = 1", "DELETE FROM orders WHERE id = 2"]
+
+
+@pytest.mark.parametrize("bad", ["SELECT 1 DROP TABLE t", "DELETE FROM orders WHERE", "foo bar baz"])
+@pytest.mark.parametrize("position", [0, 1, 2])
+def test_an_unreadable_statement_anywhere_keeps_its_place_and_the_batch_is_not_reassuring(bad, position):
+    statements = list(GOOD)
+    statements.insert(position, bad)
+    data = validate("; ".join(statements))
+    assert data["statement_count"] == 3
+    assert [s["sql"] for s in data["statements"]] == statements
+    for index, statement in enumerate(data["statements"]):
+        if index == position:
+            assert_not_analysed(statement, bad)
+        else:
+            # Read in full on its own: analysed, with its own confidence.
+            assert statement["analysis_status"] == "analysed" and statement["analysis_text_differs"] is False
+            assert statement["confidence"] in ("HIGH", "LIMITED")
+    assert (data["overall_score"], data["overall_risk_level"], data["overall_confidence"]) == (100, "CRITICAL", "LOW")
+
+
+def test_statements_that_cannot_be_attributed_fail_closed_as_one_unreadable_result():
+    # An unterminated string: the script cannot be split into statements reliably.
+    sql = "SELECT * FROM orders WHERE id = 1; SELECT 'abc; DROP TABLE t"
+    data = validate(sql)
+    assert data["statement_count"] == 1
+    assert_not_analysed(data["statements"][0], sql)
+
+
+def test_no_statement_is_ever_scored_from_a_partial_reading():
+    from backend.parser import parse_sql
+
+    for sql in ["SELECT 1 DROP TABLE t", "SELECT 1; DELETE FROM orders WHERE",
+                "SELECT * FROM orders INTO OUTFILE '/x'; SELECT 1", "BEGIN DELETE FROM t; END"]:
+        assert not any(facts.lossy_parse for facts in parse_sql(sql)), sql
 
 
 @pytest.mark.parametrize("sql", ["", "   \n\t ", "-- note\n/* block */ ;\n# hash"])

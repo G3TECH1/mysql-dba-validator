@@ -363,7 +363,7 @@ def test_metadata_failure_is_named_and_partial(rendered):
     assert "Partial evidence" in out["metadata_failed"]["summary"]
 
 
-@pytest.mark.parametrize("name", ["select_into", "trailing_select_into"])
+@pytest.mark.parametrize("name", ["select_into"])
 def test_select_into_is_explained_as_not_eligible(rendered, name):
     fixtures, out = rendered
     assert fixtures[name]["statements"][0]["evidence"]["plan"]["state"] == "not_eligible"
@@ -465,12 +465,18 @@ def test_write_without_where_has_all_rows_scope_and_high_confidence(rendered):
     assert view["confidence"] == "HIGH"
 
 
-def test_partly_read_sql_is_flagged_and_low_confidence(rendered):
+def test_sql_read_only_partly_is_shown_as_not_analysed_and_incomplete(rendered):
     fixtures, out = rendered
-    assert fixtures["trailing_select_into"]["statements"][0]["analysis_text_differs"] is True
+    statement = fixtures["trailing_select_into"]["statements"][0]
+    # Never scored as the SELECT the parser could read: not analysed, shown as submitted.
+    assert statement["analysis_status"] == "unreadable" and statement["analysis_text_differs"] is False
+    assert statement["sql"] == "SELECT * FROM users INTO OUTFILE '/tmp/x'"
     view = out["trailing_select_into"]["statements"][0]
-    assert view["warning"].startswith("The SQL could only be read partly.")
-    assert view["confidence"] == "LOW"
+    assert view["confidence"] == "LOW" and view["warning"] is None
+    assert "SELECT * FROM users INTO OUTFILE '/tmp/x'" in view["text"]
+    overview = out["trailing_select_into"]["overview"]
+    assert "Incomplete analysis" in overview and "Complete" not in overview.replace("Incomplete", "")
+    assert "1 of 1 statement was not analysed" in overview
     assert out["select_into"]["statements"][0]["warning"] is None
 
 
@@ -605,7 +611,15 @@ def test_overview_shows_the_response_and_links_findings_to_statements(rendered):
         assert f"Confidence{data['overall_confidence']}" in overview, name
         assert f"Statements{data['statement_count']}" in overview, name
         assert "not a safety rating" in overview, name
-        assert ("Complete, with limitations" in overview) is (data["overall_confidence"] != "HIGH"), name
+        not_analysed = sum(1 for s in data["statements"] if s["parse_error"])
+        if not_analysed:
+            # Incomplete SQL analysis is its own state, never "Complete" (with or without limitations).
+            assert "Incomplete analysis" in overview, name
+            assert "Complete" not in overview.replace("Incomplete", ""), name
+            assert f"{not_analysed} of {data['statement_count']} statement" in overview, name
+        else:
+            assert "Incomplete analysis" not in overview, name
+            assert ("Complete, with limitations" in overview) is (data["overall_confidence"] != "HIGH"), name
         assert view["cardIds"] == [f"statement-{n}" for n in range(1, data["statement_count"] + 1)], name
         assert set(view["findingLinks"]) <= set(f"#{card}" for card in view["cardIds"]), name
         # No safety claim and no plan claim beyond what the response reports.

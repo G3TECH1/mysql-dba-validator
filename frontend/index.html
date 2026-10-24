@@ -3419,9 +3419,11 @@
 					throw new Error(errorMessage(data, 'Validation returned an unexpected response.'));
 
 				renderResults(data);
-				setStatus($('validationStatus'), data.overall_confidence === 'HIGH'
-					? 'Review complete.'
-					: 'Review complete. Confidence is ' + text(data.overall_confidence) + ': read the limitations.', 'success');
+				setStatus($('validationStatus'), notAnalysedCount(data)
+					? 'Review incomplete. ' + notAnalysedText(data, notAnalysedCount(data))
+					: data.overall_confidence === 'HIGH'
+						? 'Review complete.'
+						: 'Review complete. Confidence is ' + text(data.overall_confidence) + ': read the limitations.', 'success');
 			} catch (error) {
 				setStatus($('validationStatus'), error.message || 'Validation failed.', 'error');
 				renderError(error.message || 'Validation failed.');
@@ -4131,17 +4133,34 @@
 			return Object.entries(counts).map(([value, count]) => count + ' ' + value).join(', ');
 		}
 
+		// Statements of the response that were not analysed (they carry a parse_error).
+		function notAnalysedCount(data) {
+			return data && Array.isArray(data.statements) ? data.statements.filter(s => s.parse_error).length : 0;
+		}
+
+		function notAnalysedText(data, count) {
+			const total = data.statements.length;
+			return count + ' of ' + total + (total === 1 ? ' statement was' : ' statements were')
+				+ ' not analysed: the validator did not assess ' + (count === 1 ? 'its' : 'their')
+				+ ' risk. Review ' + (count === 1 ? 'it' : 'them') + ' by hand.';
+		}
+
 		// The current review at a glance: idle, running, complete or failed. Values come only
 		// from this page's state and the last response; nothing is counted across reviews.
 		function renderOverview(status, data, message) {
 			const band = el('div', 'ov-band');
 			const model = data ? reviewModel(data) : null;
 			const limited = data && data.overall_confidence !== 'HIGH';
+			// Statements that were not analysed (invalid, unsupported or could not be read in
+			// full): the SQL analysis itself is incomplete, whatever the database evidence.
+			const notAnalysed = notAnalysedCount(data);
 
 			const statusTile = status === 'running'
 				? overviewTile('Review status', 'In progress', 'Waiting for the validator.', 'state-running')
 				: status === 'failed'
 					? overviewTile('Review status', 'Failed', message || 'The review did not complete.', 'state-failed')
+					: status === 'complete' && notAnalysed
+						? overviewTile('Review status', 'Incomplete analysis', notAnalysedText(data, notAnalysed), 'state-warning')
 					: status === 'complete'
 						? overviewTile('Review status', limited ? 'Complete, with limitations' : 'Complete',
 							limited ? 'Read the limitations before relying on the result.' : 'All statements were assessed.',

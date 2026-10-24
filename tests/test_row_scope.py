@@ -279,8 +279,10 @@ def test_batch_confidence_is_the_weakest_statement(schema):
 
 def test_partly_read_sql_is_low_confidence_and_never_narrow(mysql):
     data = static("SELECT a FROM t INTO @x; DELETE FROM users WHERE id = 1 ORDER")
-    assert all(statement["analysis_text_differs"] for statement in data["statements"])
+    # Neither statement parses in full: not analysed (never scored from a partial reading).
+    assert [statement["analysis_status"] for statement in data["statements"]] == ["unreadable", "unreadable"]
     assert all(statement["confidence"] == "LOW" for statement in data["statements"])
+    assert all(statement["risk_level"] == "CRITICAL" for statement in data["statements"])
     assert all(statement["scope"]["basis"] != "at_most_one_row" for statement in data["statements"])
     assert data["overall_confidence"] == "LOW"
 

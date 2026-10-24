@@ -440,7 +440,7 @@ Rules (`risk_engine.static_confidence`, `main.final_confidence`):
 | `scope.factor` | `{label, points, medium_floor_applied}` \| `null` | `null` unless the scope is a verified `at_most_one_row` on a non-CRITICAL statement; `points` is the change applied (0 to −10) | `main.apply_scope_adjustment` | Factor |
 | `confidence` | `HIGH` \| `LIMITED` \| `LOW` | Always | `main.final_confidence` | Label |
 | `static_confidence` | same | Always | `risk_engine.static_confidence` | — |
-| `analysis_text_differs` | boolean | Always | parser (`lossy_parse`) | Warning |
+| `analysis_text_differs` | boolean | Always (now always `false`; see 10.6) | parser (`lossy_parse`) | Warning |
 | `analysis_status` | `analysed` \| `invalid` \| `unsupported` \| `unreadable` | Always | parser (`_not_analysed`); see 10.6 | Why a statement was not analysed |
 | `evidence.plan.rows`, `.interpreted` | int, boolean | Only when `state = collected` | `evidence_state._plan` | Grid only when interpreted |
 
@@ -507,9 +507,13 @@ case it is:
 | `unreadable` | Begins with a statement keyword, but the parser could not read it as a statement (for example `XA START 'x'`). Validity is not determined. | "Could not be read (it may be invalid, or valid MySQL the validator cannot read)". Never called invalid. |
 
 Invalidity is decided from the submitted tokens only, never from a parser
-failure. A statement the parser read only partly (the permissive fallback, for
-example `SELECT … INTO @a`) is still scored from what was read, with LOW
-confidence and `analysis_text_differs: true` (unchanged; see 17).
+failure. When a script does not parse strictly, each statement's own text is
+parsed strictly on its own: a statement that does not parse in full (for
+example a trailing `SELECT … INTO @a`) is `unreadable` (or `invalid`), shown as
+submitted, and never scored from a partial reading; the others are analysed as
+usual. When the statements cannot be attributed to their text (the script
+cannot be tokenized, or every statement parses on its own), the whole script is
+one `unreadable` result. `analysis_text_differs` is therefore always `false`.
 
 **Whole request refused.** Local `/api/validate` returns HTTP 200
 `{"error": code}` (as for `statement_limit_exceeded`); the connector returns
@@ -731,23 +735,14 @@ repository, so none was run.
   This fails safe (MEDIUM / LIMITED); whether to verify the other keys is an
   open product question. Found while preparing the live plan (fake metadata,
   2026-10-21); not yet observed on a server.
-- **Partly read statements (batch contract, 10.6):** when the strict parse of
-  a script fails, every statement in it is read by the permissive fallback. A
-  statement starting with a statement keyword that the fallback reads as a
-  statement (for example `SELECT 1 FROM t WHERE (((`, or the valid
-  `SELECT … INTO @a`) is scored from what was read, with LOW confidence and
-  `analysis_text_differs`, so it can show LOW risk. Marking it `unreadable`
-  instead would also refuse the `SELECT … INTO` forms the evidence contract
-  handles as partly read; this is an open product decision. Checked before
-  release (offline, including a fake connected database): a partly read
-  `UPDATE`/`DELETE` never gets `at_most_one_row`, a plan or a metadata
-  reduction and stays at least MEDIUM; `DROP`/`TRUNCATE` and writes read
-  without a `WHERE` stay CRITICAL; a partly read `SELECT` is never planned;
-  `INSERT` scores its base 5 whether read fully or partly. So no existing floor
-  is bypassed. What remains: a partly read `SELECT` can show LOW 0, and if the
-  parser drops a clause that widens a write's scope, the write shows MEDIUM
-  where a full reading might give HIGH or CRITICAL. LOW confidence and the
-  "read partly" warning are the only signals; review the submitted text.
+- **Statements the parser cannot read in full (batch contract, 10.6):** such a
+  statement is not analysed (`unreadable`, CRITICAL, LOW), including valid
+  MySQL the parser does not fully support (`SELECT … INTO OUTFILE`, a trailing
+  `INTO @a`), which is therefore refused rather than assessed. The permissive
+  fallback, which scored a partial reading and could show LOW 0 for text with a
+  dropped write (`SELECT 1 DROP TABLE t`), was removed after v0.6.0. A
+  statement read in full is still not proof that MySQL accepts it: the parser
+  is lenient.
 - **Comments (10.6):** executable comments are refused, not analysed, which
   also refuses valid scripts such as `mysqldump` output. The comment scan
   follows MySQL's rules for strings, quoted identifiers and comments but is

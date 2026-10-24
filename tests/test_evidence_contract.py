@@ -231,26 +231,34 @@ SELECT_INTO_FORMS = [
 
 
 def assert_not_eligible_without_a_plan(statement):
-    assert statement["statement_type"] == "SELECT"
-    assert statement["evidence"]["plan"] == {"state": "not_eligible", "reason": "plan_not_eligible"}
-    assert statement["database_evidence"]["status"] == "plan_not_eligible"
+    """A SELECT ... INTO form gets no plan: it is either a SELECT read in full, which is not
+    eligible, or not analysed at all (the parser cannot read it in full), so its INTO is
+    never dropped while the rest is scored as a plain SELECT."""
+    assert statement["analysis_text_differs"] is False
     assert statement["database_evidence"]["available"] is False
     assert statement["database_evidence"]["explain_available"] is False
     assert statement["database_evidence"]["access_type"] is None
     assert statement["evidence_factors"] == []
-    # Forms that only parse permissively lose their INTO: the analysed text is not the
-    # submitted text, so the assessment cannot be HIGH confidence.
-    assert statement["confidence"] == ("LOW" if statement["analysis_text_differs"] else "HIGH")
+    if statement["analysis_status"] == "analysed":
+        assert statement["statement_type"] == "SELECT"
+        assert statement["evidence"]["plan"] == {"state": "not_eligible", "reason": "plan_not_eligible"}
+        assert statement["database_evidence"]["status"] == "plan_not_eligible"
+        assert statement["confidence"] == "HIGH"
+    else:
+        assert statement["analysis_status"] == "unreadable"
+        assert (statement["score"], statement["risk_level"], statement["confidence"]) == (100, "CRITICAL", "LOW")
+        assert statement["evidence"]["plan"]["state"] != "collected"
 
 
 @pytest.mark.parametrize("sql", SELECT_INTO_FORMS)
-def test_select_into_forms_report_whether_the_analysed_text_differs(mysql, sql):
+def test_select_into_forms_are_read_in_full_or_not_analysed(mysql, sql):
     from backend.parser import parse_sql
 
     statement = only(local(sql))
-    assert statement["analysis_text_differs"] is parse_sql(sql)[0].lossy_parse
-    if statement["analysis_text_differs"]:
-        assert any("could only be read partly" in reason for reason in statement["reasons"])
+    assert parse_sql(sql)[0].lossy_parse is False
+    assert not any("could only be read partly" in reason for reason in statement["reasons"])
+    if statement["analysis_status"] != "analysed":
+        assert statement["sql"] == sql
 
 
 @pytest.mark.parametrize("sql", SELECT_INTO_FORMS)
@@ -271,21 +279,25 @@ def test_every_select_into_form_is_not_eligible_remotely_and_never_explained(mon
     assert not any(executed.upper().startswith("EXPLAIN") for executed, _ in server.executed)
 
 
-def test_a_lossy_parse_marks_every_statement_of_the_script():
+def test_a_statement_read_only_partly_is_not_analysed_and_the_others_keep_their_reading():
     from backend.parser import parse_sql
 
-    assert [f.lossy_parse for f in parse_sql("SELECT * FROM users WHERE id = 1; UPDATE users SET a = 1")] == [
-        False, False]
-    assert [f.lossy_parse for f in parse_sql("SELECT * INTO @a FROM users")] == [False]
-    assert [f.lossy_parse for f in parse_sql("SELECT id FROM users WHERE id = 1 INTO @a")] == [True]
-    assert [f.lossy_parse for f in parse_sql("SELECT 1; SELECT * FROM users INTO OUTFILE '/x'")] == [True, True]
+    assert [f.analysis_status for f in parse_sql("SELECT * INTO @a FROM users")] == ["analysed"]
+    facts = parse_sql("SELECT 1; SELECT * FROM users INTO OUTFILE '/x'")
+    assert [f.analysis_status for f in facts] == ["analysed", "unreadable"]
+    assert facts[1].raw_sql == "SELECT * FROM users INTO OUTFILE '/x'"
+    assert not any(f.lossy_parse for f in facts)
 
 
-def test_a_select_in_a_lossy_script_is_not_planned(mysql):
-    """The fallback can't vouch for any statement of the script, so none is planned."""
+def test_only_the_select_read_in_full_is_planned_beside_an_unreadable_statement(mysql):
+    """Each statement is parsed strictly on its own: the one read in full is planned as it
+    would be alone; the one the parser cannot read in full never is."""
     data = local("SELECT * FROM users WHERE id = 1; SELECT * FROM users INTO OUTFILE '/tmp/x';")
-    assert [s["evidence"]["plan"]["state"] for s in data["statements"]] == ["not_eligible", "not_eligible"]
-    assert explains(mysql) == []
+    first, second = data["statements"]
+    assert first["analysis_status"] == "analysed" and second["analysis_status"] == "unreadable"
+    assert second["evidence"]["plan"]["state"] != "collected"
+    assert len(explains(mysql)) == 1 and "INTO" not in explains(mysql)[0].upper()
+    assert_read_only_boundary(mysql)
 
 
 def test_local_plan_failure_with_metadata_is_partial_evidence(mysql):
