@@ -54,10 +54,16 @@ database connected, so the result is static analysis only.*
   it is reported as not analysed (`CRITICAL`, `LOW` confidence, shown as
   submitted) and the review is marked incomplete; the other statements are
   still analysed. This includes valid MySQL the parser does not fully support,
-  such as `SELECT ... INTO OUTFILE` or `INTO @var` at the end of a `SELECT`.
+  such as `SELECT ... INTO` in any position (`INTO OUTFILE`, `INTO @var`).
   When the statements cannot be told apart reliably (for example an
   unterminated string), the whole input is one unreadable result. A statement
   the parser reads in full is not proof that MySQL accepts it.
+- **A `SELECT` is not always a plain read.** A `SELECT` with a locking clause
+  (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`), or one that calls a
+  function outside the validator's reviewed list of MySQL built-ins (a stored
+  function, `SLEEP`, `GET_LOCK`, `LOAD_FILE`, ...), is reported as at least
+  `MEDIUM` with `LIMITED` confidence. The validator cannot see the transaction
+  it runs in or what a stored function does.
 - **Executable comments are refused.** MySQL runs the contents of executable
   comments (`/*! ... */`, `/*!50000 ... */`) as SQL, so input containing one
   is refused (`executable_comment_not_supported`) rather than assessed. This

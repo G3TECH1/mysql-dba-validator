@@ -20,8 +20,9 @@ from dataclasses import dataclass, field
 
 from .parser import NOT_ANALYSED_WORDING, UNREADABLE, StatementFacts, parse_sql
 from . import models
+from .db_evidence import PERMITTED_CALL_NAMES, call_names_permitted
 from .row_scope import ALL_ROWS, static_row_scope
-from typing import Union
+from typing import Optional, Union
 
 
 # ------------------------------------------------------------------
@@ -76,6 +77,46 @@ CONCURRENCY_CHECK = (
 )
 
 STATEMENTS_WITH_ROW_IMPACT = {"UPDATE", "DELETE", "INSERT", "REPLACE", "CALL"}
+
+# A SELECT that can lock rows, or that calls a function whose effects were not
+# established, is not presented as a read-only query: MEDIUM at least, LIMITED confidence.
+SELECT_SIDE_EFFECT_FLOOR = 20
+LOCKING_READ_FINDING = "Locking read (FOR UPDATE / FOR SHARE)"
+LOCKING_READ_REASON = (
+    "This SELECT has a locking clause. It does not change data, but when autocommit is "
+    "disabled (for example inside START TRANSACTION) MySQL keeps locks on the rows it reads "
+    "until the transaction commits or rolls back, so other transactions that update or lock "
+    "those rows may have to wait. The validator cannot see the transaction it runs in."
+)
+UNREVIEWED_CALL_FINDING = "Calls a function whose effects were not established"
+UNREVIEWED_CALL_REASON = (
+    "This SELECT calls {calls}, which is not on the validator's reviewed list of MySQL "
+    "built-in functions, so its effects were not established. A stored or loadable function "
+    "can change data, and some built-ins wait, take locks, read server files or change "
+    "session state."
+)
+UNIDENTIFIED_CALLS = "a function the validator could not identify (a quoted or schema-qualified name)"
+
+
+def select_side_effects(facts: StatementFacts) -> tuple[bool, Optional[str]]:
+    """(locking read, unreviewed calls) for a SELECT, or an EXPLAIN ANALYZE that runs one.
+
+    The calls are the function calls (parser.function_call_names: words written before "("
+    that the AST does not read as other syntax) that are not on the reviewed function list
+    (backend.db_evidence, the same policy that decides plan requests), as text for the
+    finding; None when every call is reviewed.
+    """
+    runs_select = facts.statement_type == "SELECT" or (
+        facts.statement_type == "DESCRIBE" and facts.explain_analyze
+        and facts.explained_statement_type == "SELECT")
+    if not runs_select or facts.parse_error:
+        return False, None
+    names = facts.function_call_names
+    if call_names_permitted(names):
+        return facts.locking_read, None
+    if names is None:
+        return facts.locking_read, UNIDENTIFIED_CALLS
+    return facts.locking_read, ", ".join(f"{name}()" for name in sorted(names - PERMITTED_CALL_NAMES))
 
 # A WHERE clause that is true for every row by its structure (WHERE 1, WHERE TRUE,
 # WHERE id = 5 OR 1): the write matches every row, exactly as with no WHERE.
@@ -206,6 +247,11 @@ def static_confidence(
         "REPLACE",
         "CALL",
     }:
+        return "LIMITED"
+
+    locking, calls = select_side_effects(facts)
+    if locking or calls:
+        # Whether it locks or what the called function does is not established by the SQL.
         return "LIMITED"
 
     return "HIGH"
@@ -597,6 +643,28 @@ def score_statement(
         )
 
     # --------------------------------------------------------------
+    # SELECT THAT CAN LOCK ROWS OR CALLS AN UNREVIEWED FUNCTION
+    # --------------------------------------------------------------
+
+    select_locking, select_calls = select_side_effects(facts)
+
+    if select_locking:
+
+        reasons.append(LOCKING_READ_REASON)
+
+        checklist.append(
+            "Check the transaction this SELECT runs in and how long it holds its row locks."
+        )
+
+    if select_calls:
+
+        reasons.append(UNREVIEWED_CALL_REASON.format(calls=select_calls))
+
+        checklist.append(
+            "Check what each called function does before running this SELECT."
+        )
+
+    # --------------------------------------------------------------
     # MULTI-STATEMENT BATCH
     # --------------------------------------------------------------
 
@@ -680,6 +748,18 @@ def score_statement(
         and score < 20
     ):
         score = 20
+
+    # A SELECT that can lock rows or calls an unreviewed function is MEDIUM at least.
+    if (select_locking or select_calls) and score < SELECT_SIDE_EFFECT_FLOOR:
+
+        factors.append(
+            ScoreFactor(
+                "MEDIUM minimum for a SELECT that can lock rows or calls an unreviewed function",
+                SELECT_SIDE_EFFECT_FLOOR - score,
+            )
+        )
+
+        score = SELECT_SIDE_EFFECT_FLOOR
 
     risk_level = _risk_level(score)
 

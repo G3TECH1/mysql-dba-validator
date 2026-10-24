@@ -212,11 +212,14 @@ def test_dml_with_failed_metadata_is_unavailable_not_metadata(mysql):
     assert data["analysis_mode"] == "STATIC_DATABASE_UNAVAILABLE"
 
 
-def test_select_into_is_not_eligible_for_a_plan(mysql):
+def test_select_into_is_not_analysed_and_never_planned(mysql):
+    # sqlglot reads SELECT ... INTO as a new table (CREATE TABLE ... AS SELECT): not analysed.
     data = local("SELECT * INTO @a FROM users")
     statement = only(data)
-    assert statement["evidence"]["plan"] == {"state": "not_eligible", "reason": "plan_not_eligible"}
-    assert statement["database_evidence"]["status"] == "plan_not_eligible"
+    assert statement["analysis_status"] == "unreadable"
+    assert statement["sql"] == "SELECT * INTO @a FROM users"
+    assert statement["evidence"]["plan"]["state"] != "collected"
+    assert statement["database_evidence"]["available"] is False
     assert explains(mysql) == []
     assert_read_only_boundary(mysql)
 
@@ -282,7 +285,8 @@ def test_every_select_into_form_is_not_eligible_remotely_and_never_explained(mon
 def test_a_statement_read_only_partly_is_not_analysed_and_the_others_keep_their_reading():
     from backend.parser import parse_sql
 
-    assert [f.analysis_status for f in parse_sql("SELECT * INTO @a FROM users")] == ["analysed"]
+    # INTO before FROM is read as a new table, so it is not analysed either (see above).
+    assert [f.analysis_status for f in parse_sql("SELECT * INTO @a FROM users")] == ["unreadable"]
     facts = parse_sql("SELECT 1; SELECT * FROM users INTO OUTFILE '/x'")
     assert [f.analysis_status for f in facts] == ["analysed", "unreadable"]
     assert facts[1].raw_sql == "SELECT * FROM users INTO OUTFILE '/x'"

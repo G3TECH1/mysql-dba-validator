@@ -11,6 +11,7 @@ This layer does NOT decide whether SQL is safe. It extracts facts.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -177,9 +178,17 @@ class StatementFacts:
     # schema-qualified. Used only by the execution-plan function policy.
     source_call_names: Optional[frozenset[str]] = None
 
+    # source_call_names without the words the AST reads as something other than a
+    # function call (function_call_names). Used by the SELECT side-effect assessment.
+    function_call_names: Optional[frozenset[str]] = None
+
     # True when the operation is capable of affecting an entire table
     # or making a broad schema/data change.
     is_full_table_ddl: bool = False
+
+    # True when the statement has a locking clause (FOR UPDATE, FOR SHARE, LOCK IN SHARE
+    # MODE, with any option), anywhere including a subquery. Read from the AST.
+    locking_read: bool = False
 
     parse_error: Optional[str] = None
 
@@ -673,6 +682,46 @@ def call_names(tokens: list[Token]) -> Optional[frozenset[str]]:
     return frozenset(names)
 
 
+def _non_call_words(expr: exp.Expression) -> Counter:
+    """Upper-case words the AST shows were written before "(" without being a function call:
+    - a CTE or derived-table alias with a column list (WITH r(n) AS ..., AS d(a, b));
+    - a table's partition selection (FROM t PARTITION (p0));
+    - JSON_TABLE(...) and its COLUMNS (...) clauses: MySQL's only table function, a
+      built-in (stored and loadable functions return a single value, so none is a table);
+    - a full-text search, MATCH (...) AGAINST (...).
+    """
+    words: Counter = Counter()
+    for alias in expr.find_all(exp.TableAlias):
+        if alias.columns and alias.name:
+            words[alias.name.upper()] += 1
+    words["PARTITION"] += sum(1 for _ in expr.find_all(exp.Partition))
+    words["JSON_TABLE"] += sum(1 for _ in expr.find_all(exp.JSONTable))
+    words["COLUMNS"] += sum(1 for _ in expr.find_all(exp.JSONSchema))
+    searches = sum(1 for _ in expr.find_all(exp.MatchAgainst))
+    words["MATCH"] += searches
+    words["AGAINST"] += searches
+    return words
+
+
+def function_call_names(tokens: Optional[list[Token]], expr: exp.Expression,
+                        names: Optional[frozenset[str]]) -> Optional[frozenset[str]]:
+    """The statement's call_names() that are function calls: a word counts while it is
+    written before "(" more often than the AST accounts for it as something else
+    (_non_call_words), so a real call is kept even beside a CTE of the same name.
+    None (unknown) stays None."""
+    if names is None or not tokens:
+        return names
+    written = Counter(token.text.upper() for token, following in zip(tokens, tokens[1:])
+                      if following.token_type == TokenType.L_PAREN)
+    other = _non_call_words(expr)
+    # operand op ANY (subquery): SOME is an alias of ANY, and sqlglot reads both as exp.Any
+    # without recording which word was written. Both are accounted for only when every
+    # ANY ( / SOME ( written is such a comparison; otherwise both still count as calls.
+    if written["ANY"] + written["SOME"] <= sum(1 for _ in expr.find_all(exp.Any)):
+        other["ANY"], other["SOME"] = written["ANY"], written["SOME"]
+    return frozenset(name for name in names if written[name] > other[name])
+
+
 def statement_call_names(sql: str, expected: int) -> list[Optional[frozenset[str]]]:
     """call_names() per statement, split on ";" exactly as sqlglot splits a script.
 
@@ -894,6 +943,13 @@ def _not_analysed(chunk: Optional[list[Token]],
         return (UNSUPPORTED, f"CREATE {kind}",
                 f"CREATE {kind} defines a stored program; the validator does not analyse "
                 f"stored program bodies")
+    if expr is not None and expr.find(exp.Into):
+        # sqlglot reads SELECT ... INTO as a new table (SELECT INTO <table>), which it writes
+        # back as CREATE TABLE ... AS SELECT with a variable as the table: not the statement
+        # MySQL runs (INTO variables or a file), so it is not analysed.
+        return (UNREADABLE, "UNKNOWN",
+                "SELECT ... INTO is not analysed: the parser reads its INTO target as a new "
+                "table, not as the variables or file MySQL writes to")
     return None
 
 
@@ -1067,6 +1123,9 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
             facts_list.append(facts)
             continue
 
+        facts.function_call_names = function_call_names(
+            chunks[index] if chunks is not None else None, expr, facts.source_call_names)
+
         # ---------------------------------------------------------
         # EXPLAIN / DESCRIBE
         # ---------------------------------------------------------
@@ -1153,6 +1212,7 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
             if hasattr(expr, "args")
             else False
         )
+        facts.locking_read = expr.find(exp.Lock) is not None
         facts.single_table_write = _is_single_table_write(expr, facts.tables)
 
         # ---------------------------------------------------------

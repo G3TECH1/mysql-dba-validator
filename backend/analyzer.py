@@ -17,7 +17,15 @@ from .parser import NOT_ANALYSED_WORDING, UNREADABLE, StatementFacts
 from . import models
 from .recommendations import recommendations_from_gaps
 from .evidence import affected_row_count_gap, execution_plan_gap, generic_gap
-from .risk_engine import CANDIDATE_ROWS_CHECK, static_confidence
+from .risk_engine import (
+    CANDIDATE_ROWS_CHECK,
+    LOCKING_READ_FINDING,
+    LOCKING_READ_REASON,
+    UNREVIEWED_CALL_FINDING,
+    UNREVIEWED_CALL_REASON,
+    select_side_effects,
+    static_confidence,
+)
 
 
 # Static-view reason; backend.evidence_state restates it when evidence was attempted.
@@ -185,6 +193,24 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
         ))
         checklist.append(f"Review the explained {explained} as if it will be run on its own.")
 
+    # A SELECT (or the SELECT an EXPLAIN ANALYZE runs) that can lock rows, or that calls
+    # a function whose effects were not established: not a plain read.
+    select_locking, select_calls = select_side_effects(facts)
+    if select_locking:
+        findings.append(models.Finding(
+            severity="MEDIUM",
+            title=LOCKING_READ_FINDING,
+            description=LOCKING_READ_REASON,
+        ))
+        checklist.append("Check the transaction this SELECT runs in and how long it holds its row locks.")
+    if select_calls:
+        findings.append(models.Finding(
+            severity="MEDIUM",
+            title=UNREVIEWED_CALL_FINDING,
+            description=UNREVIEWED_CALL_REASON.format(calls=select_calls),
+        ))
+        checklist.append("Check what each called function does before running this SELECT.")
+
     # Stored-procedure calls
     if stmt_type == "CALL":
         findings.append(models.Finding(
@@ -264,6 +290,13 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
     elif stmt_type == "DESCRIBE" and explained not in (None, "SELECT"):
         data_level = "MEDIUM"
         data_reason = f"Plans a {explained} without running it; the {explained} changes data if run on its own."
+    elif select_calls:
+        data_level = "UNKNOWN"
+        data_reason = ("Calls a function whose effects were not established; a stored or loadable "
+                       "function can change data." + (" It is also a locking read." if select_locking else ""))
+    elif select_locking:
+        data_level = "LOW"
+        data_reason = "Does not change data, but it is a locking read: it can lock the rows it reads."
     else:
         data_level = "LOW"
         data_reason = "Read-only or no data mutation detected."
@@ -281,6 +314,11 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
     if stmt_type == "ALTER" and facts.is_full_table_ddl:
         exec_level = "MEDIUM"
         exec_reason = "ALTER dropping a column can be impactful on large tables."
+
+    if select_locking:
+        exec_level = "MEDIUM"
+        exec_reason = ("Locking read: other transactions that update or lock the same rows may have "
+                       "to wait while its locks are held.")
 
     dimensions.append(models.RiskDimension(name="Execution Risk", level=exec_level, reason=exec_reason))
 
