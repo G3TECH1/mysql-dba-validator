@@ -96,27 +96,47 @@ UNREVIEWED_CALL_REASON = (
     "session state."
 )
 UNIDENTIFIED_CALLS = "a function the validator could not identify (a quoted or schema-qualified name)"
+EXPLAIN_CALL_NOTE = (
+    " EXPLAIN does not run the SELECT, but MySQL can evaluate functions while planning it."
+)
+
+# Query statement types as parser._classify names them: a SELECT, a set operation of
+# query blocks (UNION, INTERSECT, EXCEPT) and a parenthesised query, (SELECT ...).
+QUERY_STATEMENT_TYPES = frozenset({"SELECT", "UNION", "INTERSECT", "EXCEPT", "SUBQUERY"})
 
 
 def select_side_effects(facts: StatementFacts) -> tuple[bool, Optional[str]]:
-    """(locking read, unreviewed calls) for a SELECT, or an EXPLAIN ANALYZE that runs one.
+    """(locking read, unreviewed calls) for a query, or an EXPLAIN of one.
+
+    A query is a SELECT, a set operation or a parenthesised query; a locking clause or
+    call in any of its query blocks counts. A plain EXPLAIN does not run the query, so it
+    has no locking read, but MySQL can evaluate functions while planning (evidence
+    contract section 11), so its calls count. EXPLAIN ANALYZE runs the query: both count.
 
     The calls are the function calls (parser.function_call_names: words written before "("
     that the AST does not read as other syntax) that are not on the reviewed function list
     (backend.db_evidence, the same policy that decides plan requests), as text for the
     finding; None when every call is reviewed.
     """
-    runs_select = facts.statement_type == "SELECT" or (
-        facts.statement_type == "DESCRIBE" and facts.explain_analyze
-        and facts.explained_statement_type == "SELECT")
-    if not runs_select or facts.parse_error:
+    explains_query = (facts.statement_type == "DESCRIBE"
+                      and facts.explained_statement_type in QUERY_STATEMENT_TYPES)
+    if facts.parse_error or not (facts.statement_type in QUERY_STATEMENT_TYPES or explains_query):
         return False, None
+    locking = facts.locking_read and (not explains_query or facts.explain_analyze)
     names = facts.function_call_names
     if call_names_permitted(names):
-        return facts.locking_read, None
+        return locking, None
     if names is None:
-        return facts.locking_read, UNIDENTIFIED_CALLS
-    return facts.locking_read, ", ".join(f"{name}()" for name in sorted(names - PERMITTED_CALL_NAMES))
+        return locking, UNIDENTIFIED_CALLS
+    return locking, ", ".join(f"{name}()" for name in sorted(names - PERMITTED_CALL_NAMES))
+
+
+def unreviewed_call_reason(facts: StatementFacts, calls: str) -> str:
+    """The unreviewed-call finding text; a plain EXPLAIN also says why planning matters."""
+    reason = UNREVIEWED_CALL_REASON.format(calls=calls)
+    if facts.statement_type == "DESCRIBE" and not facts.explain_analyze:
+        reason += EXPLAIN_CALL_NOTE
+    return reason
 
 # A WHERE clause that is true for every row by its structure (WHERE 1, WHERE TRUE,
 # WHERE id = 5 OR 1): the write matches every row, exactly as with no WHERE.
@@ -658,7 +678,7 @@ def score_statement(
 
     if select_calls:
 
-        reasons.append(UNREVIEWED_CALL_REASON.format(calls=select_calls))
+        reasons.append(unreviewed_call_reason(facts, select_calls))
 
         checklist.append(
             "Check what each called function does before running this SELECT."

@@ -93,6 +93,22 @@ How the components and request flows fit together is described in
   connector.
 - API responses, including request-validation errors, do not include submitted
   credential values.
+- **Update check (the only request to the internet).** When the page opens,
+  the web app asks GitHub for the latest official release, at most once per
+  start: one `GET` with no body to
+  `https://api.github.com/repos/realspinn/mysql-dba-validator/releases/latest`,
+  over TLS with certificate and host-name verification. It sends no SQL,
+  login, host name, schema or other connection details. GitHub sees your IP
+  address and a User-Agent naming the installed version
+  (`MySQL-DBA-Validator/<version>`). Nothing is downloaded or installed; a
+  newer release is only shown as a dismissible notice with a link to its
+  official release page. Any failure (offline, timeout, failed TLS
+  verification, rate limit, unexpected answer) shows nothing. Only this
+  server's own loopback page can trigger it (`POST /api/update-status`,
+  checked like the heartbeat), so it does not run when the page is served to
+  other machines. To turn it off, set the environment variable
+  `MDV_UPDATE_CHECK=off` (or add that line to the `.env` file in the data
+  folder, `%LOCALAPPDATA%\MySQLDBAValidator\` on Windows): nothing is sent.
 
 ## Known limitations
 

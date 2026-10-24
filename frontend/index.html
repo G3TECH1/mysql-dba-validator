@@ -611,6 +611,29 @@
 			font-size: 14px
 		}
 
+		/* Update notice: in the page flow, never over the review. */
+		.update-notice {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px 14px;
+			margin-bottom: 16px;
+			padding: 10px 14px;
+			background: var(--accent-soft);
+			border: 1px solid var(--border);
+			border-radius: var(--radius-sm);
+			color: var(--text)
+		}
+
+		.update-notice a {
+			color: var(--accent-text);
+			font-weight: 600
+		}
+
+		.update-notice button {
+			margin-left: auto
+		}
+
 		button:focus-visible {
 			outline: 2px solid var(--accent);
 			outline-offset: 2px
@@ -2512,6 +2535,11 @@
 		</aside>
 
 		<main>
+			<div class="update-notice" id="updateNotice" role="status" hidden>
+				<span id="updateNoticeText"></span>
+				<a id="updateNoticeLink" target="_blank" rel="noopener noreferrer">Release notes</a>
+				<button type="button" class="secondary" id="updateNoticeDismiss">Dismiss</button>
+			</div>
 			<section class="view" id="dashboardView" aria-labelledby="dashboardHeading">
 				<header class="view-head">
 					<div>
@@ -4403,7 +4431,7 @@
 		});
 
 		// Appearance: Light / Dark / System. Only the theme word is stored, under 'mdv-theme';
-		// nothing else on this page uses browser storage.
+		// the only other stored value is a dismissed update's version (below).
 		const THEMES = ['light', 'dark', 'system'];
 		function applyTheme(choice) {
 			if (choice === 'light' || choice === 'dark') document.documentElement.setAttribute('data-theme', choice);
@@ -4441,6 +4469,49 @@
 		document.addEventListener('visibilitychange', () => {
 			if (document.visibilityState === 'visible') sendHeartbeat();
 		});
+
+		// Update notice. The backend checks for a newer official release at most once per
+		// start (backend/update_check.py); the page only asks its own backend. Shown only
+		// for a newer version whose link is the official release page. Dismissal is
+		// remembered per version under 'mdv-update-dismissed' (just the version, and only
+		// when storage is available; otherwise only for this page).
+		const UPDATE_VERSION = /^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$/;
+		const RELEASE_PAGE = 'https://github.com/realspinn/mysql-dba-validator/releases/tag/v';
+		let updateDismissedHere = '';
+		function readUpdateDismissal() {
+			try {
+				const stored = localStorage.getItem('mdv-update-dismissed');
+				return UPDATE_VERSION.test(stored || '') ? stored : '';
+			} catch (_) { return '' }
+		}
+		function saveUpdateDismissal(version) {
+			if (!UPDATE_VERSION.test(version)) return;
+			try { localStorage.setItem('mdv-update-dismissed', version) } catch (_) { }
+		}
+		function renderUpdateNotice(data) {
+			const notice = $('updateNotice');
+			const version = data && data.state === 'update_available' && typeof data.version === 'string'
+				&& UPDATE_VERSION.test(data.version) ? data.version : '';
+			if (!version || data.url !== RELEASE_PAGE + version || version === updateDismissedHere
+				|| version === readUpdateDismissal()) {
+				notice.hidden = true;
+				return;
+			}
+			const current = typeof data.current === 'string' && UPDATE_VERSION.test(data.current) ? data.current : '';
+			$('updateNoticeText').textContent = 'MySQL DBA Validator ' + version + ' is available'
+				+ (current ? ' (you have ' + current + ').' : '.');
+			$('updateNoticeLink').href = RELEASE_PAGE + version;
+			$('updateNoticeDismiss').onclick = () => {
+				updateDismissedHere = version;
+				saveUpdateDismissal(version);
+				notice.hidden = true;
+			};
+			notice.hidden = false;
+		}
+		fetch('/api/update-status', { method: 'POST', cache: 'no-store' })
+			.then(response => response.ok ? response.json() : null)
+			.then(renderUpdateNotice)
+			.catch(() => { });
 
 		// Initial state
 		updateContext();

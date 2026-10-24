@@ -45,6 +45,7 @@ from .risk_engine import (
 from .analyzer import analyze_batch
 from .parser import has_executable_comment, parse_sql, unsupported_script
 from .version import APP_VERSION
+from .update_check import check_for_update
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -815,6 +816,18 @@ def heartbeat(request: Request):
     if on_heartbeat is not None:
         on_heartbeat()
     return Response(status_code=204)
+
+
+@app.post("/api/update-status")
+def update_status(request: Request):
+    """Whether a newer official release exists (backend.update_check).
+
+    Only for this server's own loopback page, as the heartbeat, so another website
+    cannot make the app contact GitHub. Takes no data; any body is ignored.
+    """
+    if not is_own_loopback_page(request):
+        return Response(status_code=403)
+    return check_for_update()
 
 
 class EvidenceRequest(PydanticBaseModel):

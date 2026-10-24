@@ -230,7 +230,9 @@ v0.5.0 no longer does (see
   `SELECT`, and writes whose row scope is established (`all_rows`, or
   `at_most_one_row` from table metadata); `LIMITED` for other writes,
   `INSERT`, `REPLACE`, `CALL`, and a `SELECT` with a locking clause or a call
-  outside the reviewed function list (also `MEDIUM` at least); `LOW` when the SQL could not be parsed (a
+  outside the reviewed function list (also `MEDIUM` at least), in any query
+  block of a set operation too, and a plain `EXPLAIN` of a `SELECT` with such
+  a call (not for its locking clause: `EXPLAIN` takes no locks); `LOW` when the SQL could not be parsed (a
   statement the parser cannot read in full is not analysed). A referenced table that
   metadata did not find caps it at `LIMITED`. Missing or failed evidence never
   raises it. Batch `overall_confidence` is the lowest statement confidence.
@@ -286,10 +288,23 @@ for an empty batch).
   target registry, logs, URLs or browser storage. There is no credential
   vault. (Python cannot guarantee that memory is wiped.)
 - Company logins go only to the connector; the web app refuses them.
-- The page stores only its theme choice in browser storage.
+- The page stores only its theme choice and, when an update notice is
+  dismissed, that release's version number in browser storage.
 - Per-user data lives in `%LOCALAPPDATA%\MySQLDBAValidator\`: the connector's
   target registry (destinations and approval state, never credentials) and
   `logs\backend.log`. The program folder is never written to.
+
+## Update notice
+
+`backend/update_check.py`, reached only through `POST /api/update-status`
+from the server's own loopback page, asks GitHub's REST API for the latest
+published release at most once per process and keeps the answer in memory.
+One fixed `GET` with no body and fixed headers, a 5 s timeout, verified TLS
+and no redirects. A release is reported only when its tag is a strict
+`vX.Y.Z`, numerically newer than `backend/version.py`, and its page is
+exactly the official release page for that tag; every failure is
+`unavailable`, shown as nothing. It never downloads or installs anything.
+`MDV_UPDATE_CHECK=off` disables it. Details: [SECURITY.md](SECURITY.md).
 
 ## Packaged application
 
@@ -307,6 +322,7 @@ Build, audit and release steps are in [RELEASING.md](RELEASING.md).
 ## Deliberately not in the architecture
 
 - No endpoint that executes submitted SQL, and no generic query endpoint.
+- No automatic update: the update notice only links to the release page.
 - No writable local evidence connection and no switch to enable one.
 - No credential storage of any kind.
 - No path from the browser to a company database that bypasses the connector.

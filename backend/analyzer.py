@@ -22,9 +22,9 @@ from .risk_engine import (
     LOCKING_READ_FINDING,
     LOCKING_READ_REASON,
     UNREVIEWED_CALL_FINDING,
-    UNREVIEWED_CALL_REASON,
     select_side_effects,
     static_confidence,
+    unreviewed_call_reason,
 )
 
 
@@ -193,8 +193,8 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
         ))
         checklist.append(f"Review the explained {explained} as if it will be run on its own.")
 
-    # A SELECT (or the SELECT an EXPLAIN ANALYZE runs) that can lock rows, or that calls
-    # a function whose effects were not established: not a plain read.
+    # A query (or one an EXPLAIN plans or runs) that can lock rows, or that calls a
+    # function whose effects were not established: not a plain read.
     select_locking, select_calls = select_side_effects(facts)
     if select_locking:
         findings.append(models.Finding(
@@ -207,7 +207,7 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
         findings.append(models.Finding(
             severity="MEDIUM",
             title=UNREVIEWED_CALL_FINDING,
-            description=UNREVIEWED_CALL_REASON.format(calls=select_calls),
+            description=unreviewed_call_reason(facts, select_calls),
         ))
         checklist.append("Check what each called function does before running this SELECT.")
 
