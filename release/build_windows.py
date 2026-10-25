@@ -44,6 +44,16 @@ def step(message: str) -> None:
     print(f"\n==> {message}", flush=True)
 
 
+def write_checksum_file(checksum_path: Path, digest: str, name: str) -> None:
+    """Write `<digest>  <name>` with an LF newline on every platform.
+
+    Written in binary so Windows text mode cannot turn "\\n" into "\\r\\n": sha256sum -c on an
+    older coreutils and macOS's shasum -c read the trailing carriage return as part of the file
+    name and refuse the sidecar (#7).
+    """
+    checksum_path.write_bytes(f"{digest}  {name}\n".encode("ascii"))
+
+
 def run(command: list[str], **kwargs) -> None:
     print("    $ " + " ".join(str(c) for c in command), flush=True)
     subprocess.run(command, check=True, **kwargs)
@@ -148,7 +158,7 @@ def main() -> int:
     make_zip(app_dir, zip_path, f"{artifact}")
     digest = sha256(zip_path)
     checksum_path = zip_path.with_name(zip_path.name + ".sha256")
-    checksum_path.write_text(f"{digest}  {zip_path.name}\n", encoding="ascii")
+    write_checksum_file(checksum_path, digest, zip_path.name)
     run([str(vpython), str(RELEASE / "audit_artifact.py"), str(zip_path)], cwd=str(ROOT))
 
     print(f"\nRelease artifact : {zip_path}")
