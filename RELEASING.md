@@ -101,8 +101,13 @@ those versions.
 3. The **Windows portable release** workflow
    (`.github/workflows/release-windows.yml`) checks that the tag matches
    `APP_VERSION`, runs the tests, builds and audits the zip, smoke-tests it,
-   and attaches the zip and checksum to a **draft** release. The audit and smoke
-   test are release gates: if either fails, no draft is created, and the run
+   and attaches the zip and checksum to a **draft** release. All of that runs
+   with a read-only token; only a separate `draft-release` job can write
+   releases. It checks out nothing and runs no repository code: it checks that
+   the build's artifact holds exactly this tag's zip and its `.sha256` (one LF
+   line, matching the zip), tests the zip's integrity, and only then creates the
+   draft. The audit and smoke test are release gates: if either fails, no
+   draft is created, and the run
    uploads only a diagnostic manifest (file names, sizes, SHA256 hashes and the
    audit output), never the failed binaries. The same tag also starts the
    macOS workflow, which builds and tests the macOS app and adds it to that
