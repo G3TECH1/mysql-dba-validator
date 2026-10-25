@@ -1,7 +1,6 @@
 
 """
 Database evidence scaffold
-
 Provides a DBConfig and DBClient implementation. Validation evidence uses
 the MySQL login supplied on the page for each request and does not use
 MYSQL_* environment variables. The client stays read-only by default.
