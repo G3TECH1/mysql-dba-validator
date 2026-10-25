@@ -93,6 +93,10 @@ How the components and request flows fit together is described in
   connector.
 - API responses, including request-validation errors, do not include submitted
   credential values.
+- Submitted SQL is not logged. The SQL parser's own warnings quote the whole
+  statement (including any password in `ALTER USER ... IDENTIFIED BY`), and
+  reached `backend.log` and the connector console until they were silenced
+  (main branch, after v0.6.0).
 - **Update check (the only request to the internet).** When the page opens,
   the web app asks GitHub for the latest official release, at most once per
   start: one `GET` with no body to

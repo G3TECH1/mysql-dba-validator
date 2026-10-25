@@ -10,15 +10,22 @@ This layer does NOT decide whether SQL is safe. It extracts facts.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Sequence
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.tokens import Token, TokenType
+
+# sqlglot logs a warning quoting the whole statement when it falls back to an unparsed
+# Command ("'ALTER USER app IDENTIFIED BY ...' contains unsupported syntax"), which reached
+# stderr, that is backend.log or the connector console. Submitted SQL must never be
+# logged, and the validator does not use sqlglot's log: parse failures are exceptions.
+logging.getLogger("sqlglot").setLevel(logging.CRITICAL + 1)
 
 
 DIALECT = "mysql"
@@ -74,8 +81,31 @@ MYSQL_STATEMENT_KEYWORDS = frozenset({
 })
 
 # Valid MySQL 8.0 statements the validator does not analyse (VALUES and TABLE were
-# added in 8.0.19). They are reported as not analysed, never scored as low risk.
-UNSUPPORTED_STATEMENTS = frozenset({"VALUES", "TABLE", "HANDLER"})
+# added in 8.0.19). They are reported as not analysed, never scored as low risk. KILL
+# ends another session's statement or connection, which the validator cannot see.
+UNSUPPORTED_STATEMENTS = frozenset({"VALUES", "TABLE", "HANDLER", "KILL"})
+
+# A statement sqlglot reads only as a keyword plus unparsed text (exp.Command) is not
+# analysed: nothing after the keyword was read. CALL is the exception: its rule needs
+# only the keyword and says that what the procedure does is not known.
+COMMANDS_ANALYSED = frozenset({"CALL"})
+OPAQUE_COMMAND_DETAIL = (
+    "the parser read only the statement's first keyword and not the rest, so the "
+    "validator cannot see what it does"
+)
+
+# sqlglot reads START REPLICA, START SLAVE and START GROUP_REPLICATION as a transaction,
+# keeping the next words as its "modes". These are the only modes of a real transaction.
+TRANSACTION_MODES = frozenset({"READ ONLY", "READ WRITE"})
+NOT_A_TRANSACTION_DETAIL = (
+    "the parser read this START statement as a transaction, which it is not (for example "
+    "START REPLICA), so it was not analysed"
+)
+SET_NOT_ANALYSED_DETAIL = (
+    "this SET changes a system variable, a transaction or session setting, or another "
+    "server setting (GLOBAL or PERSIST settings affect the whole server), or assigns a "
+    "value from a function or locking read; the validator does not assess its effect"
+)
 
 # CREATE ... PROCEDURE/FUNCTION/TRIGGER/EVENT defines a stored program. The validator
 # does not analyse stored program bodies.
@@ -200,6 +230,12 @@ class StatementFacts:
     # parse_sql never sets it: a statement that does not parse strictly is not analysed
     # (UNREADABLE) rather than read permissively. Reported as analysis_text_differs.
     lossy_parse: bool = False
+
+    # The statement exactly as submitted, for display. raw_sql of an analysed statement is
+    # the parser's regeneration of it (REGEXP becomes REGEXP_LIKE(), EXPLAIN becomes
+    # DESCRIBE); it is what the analysis and an EXPLAIN request use. None when the
+    # submitted text could not be attributed to the statement (raw_sql is shown instead).
+    submitted_sql: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -882,6 +918,11 @@ def mysql_minus_signs(sql: str) -> str:
     return " ".join(parts)
 
 
+def _minus_sign_spaces(sql: str) -> list[int]:
+    """The positions, in mysql_minus_signs(sql), of the spaces it inserts."""
+    return [position + 1 + count for count, position in enumerate(sorted(_mysql_comment_scan(sql)[1]))]
+
+
 def unsupported_script(sql: str) -> Optional[str]:
     """An error code when the script as a whole cannot be split into statements reliably:
 
@@ -962,11 +1003,47 @@ def _not_analysed(chunk: Optional[list[Token]],
     return None
 
 
-def _source_text(sql: str, chunk: Optional[list[Token]]) -> Optional[str]:
-    """The submitted text of one statement (from its first to its last token)."""
+def _not_assessable(expr: exp.Expression, statement_type: str,
+                    call_names: Optional[frozenset[str]]) -> Optional[tuple[str, str, str]]:
+    """(analysis_status, statement_type, detail) for a statement that parsed but that the
+    validator has no rules to assess, so it is not analysed; None otherwise."""
+    if isinstance(expr, exp.Command) and statement_type not in COMMANDS_ANALYSED:
+        return UNREADABLE, statement_type, OPAQUE_COMMAND_DETAIL
+    if isinstance(expr, exp.Transaction) and any(
+            str(mode).upper() not in TRANSACTION_MODES for mode in expr.args.get("modes") or []):
+        return UNREADABLE, "START", NOT_A_TRANSACTION_DETAIL
+    if isinstance(expr, exp.Set) and not _sets_only_user_variables(expr, call_names):
+        return UNSUPPORTED, "SET", SET_NOT_ANALYSED_DETAIL
+    return None
+
+
+def _sets_only_user_variables(expr: exp.Set, call_names: Optional[frozenset[str]]) -> bool:
+    """True when every item assigns a user variable (SET @a = value, which lasts for the
+    session only) from a value that calls only reviewed functions and takes no locks."""
+    from .db_evidence import call_names_permitted  # db_evidence imports this module
+
+    items = expr.expressions
+    return (bool(items) and all(
+        isinstance(item, exp.SetItem) and item.args.get("kind") is None
+        and isinstance(item.this, exp.EQ) and isinstance(item.this.this, exp.Parameter)
+        for item in items)
+        and expr.find(exp.Lock) is None and call_names_permitted(call_names))
+
+
+def _source_text(sql: str, chunk: Optional[list[Token]],
+                 inserted: Sequence[int] = ()) -> Optional[str]:
+    """The submitted text of one statement (from its first to its last token).
+
+    sql is the text the tokens index into; inserted are the positions in it of the spaces
+    mysql_minus_signs added, which are taken out again so the text is exactly as submitted.
+    """
     if not chunk:
         return None
-    return sql[chunk[0].start:chunk[-1].end + 1]
+    start, end = chunk[0].start, chunk[-1].end + 1
+    text = sql[start:end]
+    for position in reversed([position for position in inserted if start <= position < end]):
+        text = text[:position - start] + text[position - start + 1:]
+    return text
 
 
 def _strict_error(error: Exception) -> str:
@@ -1022,8 +1099,11 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
     their text reliably, the whole script is one unreadable result.
     """
 
-    # "--" that MySQL reads as two minus signs must not be read as a comment.
-    raw_sql = mysql_minus_signs(raw_sql.strip())
+    # "--" that MySQL reads as two minus signs must not be read as a comment. The spaces
+    # this inserts are taken out again wherever submitted text is shown (_source_text).
+    submitted = raw_sql.strip()
+    raw_sql = mysql_minus_signs(submitted)
+    inserted = _minus_sign_spaces(submitted)
 
     if not raw_sql:
         return []
@@ -1040,7 +1120,7 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
         expressions = _parse_each_statement(raw_sql, unreadable)
         if expressions is None:
             facts = StatementFacts(
-                raw_sql=raw_sql,
+                raw_sql=submitted,
                 index=0,
                 parse_error=str(strict_error),
                 analysis_status=UNREADABLE,
@@ -1064,7 +1144,7 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
             # Did not parse strictly on its own: not analysed, shown as submitted.
             chunk = chunks[index] if chunks is not None else None
             facts = StatementFacts(
-                raw_sql=_source_text(raw_sql, chunk) or raw_sql,
+                raw_sql=_source_text(raw_sql, chunk, inserted) or submitted,
                 index=index,
                 parse_error=unreadable[index],
                 analysis_status=UNREADABLE,
@@ -1087,7 +1167,7 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
             # also rejects): not analysed, like a statement the parser cannot read.
             chunk = chunks[index] if chunks is not None else None
             facts_list.append(StatementFacts(
-                raw_sql=_source_text(raw_sql, chunk) or raw_sql,
+                raw_sql=_source_text(raw_sql, chunk, inserted) or submitted,
                 index=index,
                 statement_type="UNKNOWN",
                 category="OTHER",
@@ -1104,6 +1184,10 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
             statement_type=statement_type,
             category=category,
             source_call_names=source_names[index],
+            # Shown as submitted; the regenerated statement_sql is what is analysed. A
+            # single statement is the whole input when its text cannot be attributed.
+            submitted_sql=(_source_text(raw_sql, chunks[index], inserted) if chunks is not None
+                           else submitted if len(expressions) == 1 else None),
         )
 
         not_analysed = _not_analysed(chunks[index] if chunks is not None else None, expr)
@@ -1114,7 +1198,7 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
             facts.category = "OTHER"
             # Show what was submitted, not the parser's reading of it (nothing of it was
             # analysed, so the text shown no longer differs from the analysed text).
-            source = _source_text(raw_sql, chunks[index] if chunks is not None else None)
+            source = _source_text(raw_sql, chunks[index] if chunks is not None else None, inserted)
             if source:
                 facts.raw_sql, facts.lossy_parse = source, False
             facts_list.append(facts)
@@ -1126,7 +1210,7 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
             facts.parse_error = (f"not recognised as a SQL statement "
                                  f"(read as a {type(expr).__name__} expression)")
             facts.analysis_status = UNREADABLE
-            source = _source_text(raw_sql, chunks[index] if chunks is not None else None)
+            source = _source_text(raw_sql, chunks[index] if chunks is not None else None, inserted)
             if source:
                 facts.raw_sql, facts.lossy_parse = source, False
             facts_list.append(facts)
@@ -1134,6 +1218,18 @@ def parse_sql(raw_sql: str) -> list[StatementFacts]:
 
         facts.function_call_names = function_call_names(
             chunks[index] if chunks is not None else None, expr, facts.source_call_names)
+
+        not_assessable = _not_assessable(expr, facts.statement_type, facts.function_call_names)
+        if not_assessable is not None:
+            # Parsed, but nothing in the validator assesses it: not analysed, never scored
+            # from its first keyword as if it were understood.
+            facts.analysis_status, facts.statement_type, facts.parse_error = not_assessable
+            facts.category = "OTHER"
+            source = _source_text(raw_sql, chunks[index] if chunks is not None else None, inserted)
+            if source:
+                facts.raw_sql, facts.lossy_parse = source, False
+            facts_list.append(facts)
+            continue
 
         # ---------------------------------------------------------
         # EXPLAIN / DESCRIBE

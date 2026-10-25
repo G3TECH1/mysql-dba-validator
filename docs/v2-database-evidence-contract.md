@@ -503,8 +503,8 @@ case it is:
 | Status | When | Wording |
 | --- | --- | --- |
 | `invalid` | The statement does not begin with a word a MySQL 8.0 statement can begin with (`parser.MYSQL_STATEMENT_KEYWORDS`, from the manual's "SQL Statements" chapter), or begins with a literal or quoted identifier. MySQL rejects it. | "Not valid MySQL"; "Fix the SQL before proceeding." |
-| `unsupported` | Valid MySQL the validator does not analyse: `VALUES` and `TABLE` (MySQL 8.0.19+), `HANDLER`, and a stored program definition (`CREATE [DEFINER = …] PROCEDURE \| FUNCTION \| TRIGGER \| EVENT`) submitted on its own. | "Not analysed (statement type not supported)"; "Review this statement manually …". Never called invalid. |
-| `unreadable` | Begins with a statement keyword, but the parser could not read it as a statement (for example `XA START 'x'`). Validity is not determined. | "Could not be read (it may be invalid, or valid MySQL the validator cannot read)". Never called invalid. |
+| `unsupported` | Valid MySQL the validator does not analyse: `VALUES` and `TABLE` (MySQL 8.0.19+), `HANDLER`, `KILL`, a `SET` of anything but user variables (system variables at any scope, `NAMES`, transaction characteristics; or a user variable set from an unreviewed function or a locking read), and a stored program definition (`CREATE [DEFINER = …] PROCEDURE \| FUNCTION \| TRIGGER \| EVENT`) submitted on its own. | "Not analysed (statement type not supported)"; "Review this statement manually …". Never called invalid. |
+| `unreadable` | Begins with a statement keyword, but the parser could not read it as a statement (for example `XA START 'x'`), or read only its first keyword and kept the rest as unparsed text (`PREPARE`, `EXECUTE`, `LOCK`/`UNLOCK TABLES`, `RENAME`, `OPTIMIZE`, `CREATE`/`ALTER`/`DROP USER`, `CREATE ROLE`, `SET ROLE`, `GRANT`, some `REVOKE` forms, `REPLACE`; `CALL` keeps its rule), or misread it (`START REPLICA` read as a transaction). Validity is not determined. | "Could not be read (it may be invalid, or valid MySQL the validator cannot read)". Never called invalid. |
 
 Invalidity is decided from the submitted tokens only, never from a parser
 failure. When a script does not parse strictly, each statement's own text is
@@ -514,6 +514,14 @@ submitted, and never scored from a partial reading; the others are analysed as
 usual. When the statements cannot be attributed to their text (the script
 cannot be tokenized, or every statement parses on its own), the whole script is
 one `unreadable` result. `analysis_text_differs` is therefore always `false`.
+
+Every statement's `sql` is its text exactly as submitted, from its first to its
+last token: comments before or after it and the `;` that ends it are not
+included. An analysed statement is analysed, and planned, from the parser's
+regeneration of it (`REGEXP` read as `REGEXP_LIKE()`, `LIMIT 20, 10` as
+`LIMIT 10 OFFSET 20`), which is not shown. If the statements of a script parse
+but cannot be matched to their text, each analysed statement's `sql` is that
+regeneration instead (no input is known to do this).
 
 **Whole request refused.** Local `/api/validate` returns HTTP 200
 `{"error": code}` (as for `statement_limit_exceeded`); the connector returns

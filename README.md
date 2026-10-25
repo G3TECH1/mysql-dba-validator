@@ -57,7 +57,14 @@ database connected, so the result is static analysis only.*
   such as `SELECT ... INTO` in any position (`INTO OUTFILE`, `INTO @var`).
   When the statements cannot be told apart reliably (for example an
   unterminated string), the whole input is one unreadable result. A statement
-  the parser reads in full is not proof that MySQL accepts it.
+  the parser reads in full is not proof that MySQL accepts it. Statements the
+  parser reads only by their first keyword (`PREPARE`, `EXECUTE`,
+  `LOCK TABLES`, `RENAME TABLE`, `OPTIMIZE TABLE`, `GRANT`, `CREATE USER`,
+  `REPLACE`, ...), `KILL`, `SET` of anything but user variables, and
+  `START REPLICA` are not analysed either. Execution risk is not assessed from
+  the SQL alone; with an execution plan it reports the optimizer's estimates.
+  Results show each statement's SQL as submitted, without comments before or
+  after it.
 - **A `SELECT` is not always a plain read.** A `SELECT` with a locking clause
   (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`), or one that calls a
   function outside the validator's reviewed list of MySQL built-ins (a stored

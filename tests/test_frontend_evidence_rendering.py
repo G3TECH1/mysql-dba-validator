@@ -196,6 +196,12 @@ def build_fixtures() -> dict:
         "no_where": local_fixture("DELETE FROM users", username=None, password=None),
         # Sixteen mixed statements (the batch limit), SELECT plans from the fake server.
         "batch16": local_fixture("; ".join(BATCH_16)),
+        # A statement the parser reads only by its keyword, beside an analysed SELECT; a
+        # server setting; SQL the parser would regenerate differently (shown as submitted).
+        "opaque_command": local_fixture("LOCK TABLES users WRITE; SELECT * FROM users WHERE id = 1"),
+        "server_setting": local_fixture("SET GLOBAL read_only = 0", username=None, password=None),
+        "submitted_text": local_fixture("select id from users where name REGEXP '^a' LIMIT 20, 10",
+                                        username=None, password=None),
         # Analysed, valid-but-unsupported, invalid and unreadable statements in one batch.
         "not_analysed": local_fixture("SELECT * FROM users WHERE id = 1; VALUES ROW(1); SELEC x; XA START 'x'",
                                       username=None, password=None),
@@ -503,6 +509,26 @@ def test_sql_read_only_partly_is_shown_as_not_analysed_and_incomplete(rendered):
     assert "Incomplete analysis" in overview and "Complete" not in overview.replace("Incomplete", "")
     assert "1 of 1 statement was not analysed" in overview
     assert out["select_into"]["statements"][0]["warning"] is None
+
+
+def test_an_unparsed_command_or_server_setting_makes_the_review_incomplete(rendered):
+    fixtures, out = rendered
+    lock, select = fixtures["opaque_command"]["statements"]
+    assert lock["analysis_status"] == "unreadable" and select["analysis_status"] == "analysed"
+    overview = out["opaque_command"]["overview"]
+    assert "Incomplete analysis" in overview and "All statements were assessed" not in overview
+    assert "1 of 2 statements were not analysed" in overview
+    assert "LOCK TABLES users WRITE" in out["opaque_command"]["statements"][0]["text"]
+    setting = out["server_setting"]["overview"]
+    assert "Incomplete analysis" in setting and "1 of 1 statement was not analysed" in setting
+
+
+def test_the_statement_card_shows_the_sql_as_submitted(rendered):
+    fixtures, out = rendered
+    sql = "select id from users where name REGEXP '^a' LIMIT 20, 10"
+    assert fixtures["submitted_text"]["statements"][0]["sql"] == sql
+    text = out["submitted_text"]["statements"][0]["text"]
+    assert sql in text and "REGEXP_LIKE" not in text and "OFFSET" not in text
 
 
 def test_multi_row_plan_is_shown_without_a_first_row_summary(rendered):

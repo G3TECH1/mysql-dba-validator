@@ -80,6 +80,11 @@ section). The suite covers, among others:
 - **Page and packaging:** `test_frontend_served_page.py`,
   `test_frontend_evidence_rendering.py` (real Chrome; skipped if Chrome is not
   installed), `test_heartbeat.py`, `test_release_packaging.py`.
+- **Honest assessment:** `test_honest_assessment.py`: statements the parser
+  reads only by their keyword, `KILL`, `SET` of server or session settings and
+  `START REPLICA` are not analysed; execution risk is not assessed without a
+  plan and reports a plan's estimates as estimates; `sql` is the submitted
+  text while the EXPLAIN sent is unchanged; validation logs no SQL or login.
 - **Update notice:** `test_update_check.py`: version comparison, every
   failure path (HTTP 403/404/429, offline, timeout, TLS, malformed or
   unexpected JSON, a non-official release page), the exact request, caching,
