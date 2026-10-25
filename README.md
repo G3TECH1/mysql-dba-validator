@@ -14,7 +14,7 @@ Scoring is rule-based and deterministic; no AI or LLM makes risk decisions.
 The validator never runs the SQL you submit. It supports a DBA's judgement and
 does not guarantee that SQL is safe.
 
-**Current release: [v0.6.0](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0)**
+**Current release: [v0.7.0](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.7.0)**
 (pre-1.0), a portable Windows x64 app, plus an unsigned macOS (Apple Silicon)
 build.
 
@@ -120,13 +120,13 @@ Details: the
 ## Download and run
 
 Download from the
-[v0.6.0 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0).
+[v0.7.0 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.7.0).
 Each file has a matching `.sha256` checksum file there.
 
 | Platform | File | Status |
 | --- | --- | --- |
-| Windows x64 | `MySQL-DBA-Validator-v0.6.0-windows-x64.zip` | Built, audited and smoke-tested in CI; the release notes say which checks the maintainer repeated on the published zip |
-| macOS, Apple Silicon only | `MySQL-DBA-Validator-v0.6.0-macos-arm64-unsigned.zip` | Built, audited and smoke-tested in CI only; ad hoc signed, not notarized |
+| Windows x64 | `MySQL-DBA-Validator-v0.7.0-windows-x64.zip` | Built, audited and smoke-tested in CI; the release notes say which checks the maintainer repeated on the published zip |
+| macOS, Apple Silicon only | `MySQL-DBA-Validator-v0.7.0-macos-arm64-unsigned.zip` | Built, audited and smoke-tested in CI only; ad hoc signed, not notarized |
 
 **Windows**
 
@@ -134,7 +134,7 @@ Each file has a matching `.sha256` checksum file there.
    `.sha256` file:
 
    ```powershell
-   Get-FileHash .\MySQL-DBA-Validator-v0.6.0-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\MySQL-DBA-Validator-v0.7.0-windows-x64.zip -Algorithm SHA256
    ```
 
 2. Extract the zip anywhere, for example `C:\Tools\`. No installer or Python
@@ -152,17 +152,17 @@ covers local evidence, company targets and troubleshooting.
 **macOS (Apple Silicon)**
 
 Check the download with
-`shasum -a 256 -c MySQL-DBA-Validator-v0.6.0-macos-arm64-unsigned.zip.sha256`,
+`shasum -a 256 -c MySQL-DBA-Validator-v0.7.0-macos-arm64-unsigned.zip.sha256`,
 unzip it, and move `MySQL DBA Validator.app` to Applications. macOS blocks the
 first launch because the app is not notarized; the
-[release notes](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0)
+[release notes](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.7.0)
 explain how to open it.
 
-**Update notice.** When a newer official release exists, the page shows a
-small notice with a link to its release notes; you can dismiss it. Nothing
-is downloaded or installed. To check, the app asks GitHub once per start for
-the latest release: GitHub sees your IP address and the installed version,
-and no SQL, login or connection details are sent. Set
+**Update notice (since v0.7.0).** When a newer official release exists, the
+page shows a small notice with a link to its release notes; you can dismiss
+it. Nothing is downloaded or installed. To check, the app asks GitHub once per
+start for the latest release: GitHub sees your IP address and the installed
+version, and no SQL, login or connection details are sent. Set
 `MDV_UPDATE_CHECK=off` to turn it off; see
 [SECURITY.md](SECURITY.md#security-model-in-brief).
 

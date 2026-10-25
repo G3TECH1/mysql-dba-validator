@@ -30,7 +30,7 @@ than a recorded one.
 | Results page rendering of every evidence state | Real headless Chrome, driven by real API responses (part of the test suite) |
 | Local web app and connector together in a browser | Real headless Chrome, with company MySQL replaced by a stand-in |
 | Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip. The published v0.6.0 zip's checksum was re-checked on the maintainer's machine; its smoke test and artifact audit ran in CI only (below) |
-| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0, v0.5.1 or v0.6.0. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
+| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0, v0.5.1, v0.6.0 or the v0.7.0 candidate. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
 | Remote/company workflow (local connector) end to end against a real MySQL server | **Reported by the maintainer** (manual test, recorded after the v0.4.1 release): successful on Windows against an AWS RDS for MySQL test database the maintainer created. No transcript or logs were provided for this record; see [below](#remote-workflow-against-aws-rds-for-mysql-maintainer-reported) |
 | Real company MySQL, VPN/LAN connectivity, company-issued TLS, hosted HTTPS frontend | **Not verified** |
 | Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan. In v0.4.1 only the remote connector path collected one; since v0.5.0 neither path does (see below), so M1 does not arise in practice. Automated tests only |
@@ -256,6 +256,26 @@ in the sections above are for earlier states of the tree), any CI run of this
 tree (the macOS CI result recorded for v0.5.1 applies to v0.5.1 only), a real
 Mac (including approval prompts in Terminal), MySQL 8.4, a packaged build, and
 company infrastructure, VPN and TLS.
+
+## Unreleased: v0.7.0 candidate, local checks
+
+Branch `release/v0.7.0-prep`, 2026-10-25 (not pushed, not released), on
+`6f2d821` (`main`): `91148ee` (statements the validator cannot fully assess
+are not analysed, SQL shown as submitted, Execution Risk without a plan, parser
+logging silenced), `8452e4e` (optimization adviser), `3e3338d` (AI Advisor
+teaser, update notice layout) and the version bump to 0.7.0.
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Full suite on each commit | `91148ee`: 1861 passed, 4 skipped. `8452e4e`: 1931 passed, 4 skipped. With the version bump: 1936 passed, 4 skipped. The skips are the platform-only ones (three symbolic-link or POSIX tests that run on macOS, one POSIX probe) | Maintainer's Windows 10 machine, Python 3.13.5, sqlglot 30.21.0 (the release pin); FastAPI 0.141.1, pydantic 2.11.7, PyMySQL 1.2.0, older than the release pins |
+| Full suite with the version bump, other sqlglot versions | 1936 passed, 4 skipped on 30.17.0 and on 30.24.0 | Same machine |
+| `pip check` | No broken requirements | Same machine |
+| Version | `/api/health`, the FastAPI app and `release/build_windows.py` report 0.7.0 | Same machine |
+| The running app in headless Chrome (ad hoc scripts, not in the repository) | Update notice: shown from a simulated `update_available` answer given in the browser (the server ran with `MDV_UPDATE_CHECK=off`), closed with the keyboard, still dismissed after a reload. AI Advisor teaser: closed with the keyboard, still closed after the next validation, nothing written to browser storage or cookies, shown again after a reload. Both close buttons show a focus outline in the light and dark themes; no horizontal scrolling at 390 px; no request left 127.0.0.1 | Same machine, on the tree of `3e3338d` |
+
+Not shown: any CI run of this branch (Python 3.14, macOS), the release builds
+(build, audit, smoke test), the update check against the real GitHub API, any
+MySQL server, a real Mac, and a screen reader.
 
 ## v0.6.0 candidate: CI on `3b38133` (not released)
 
