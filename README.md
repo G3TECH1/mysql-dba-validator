@@ -14,7 +14,7 @@ Scoring is rule-based and deterministic; no AI or LLM makes risk decisions.
 The validator never runs the SQL you submit. It supports a DBA's judgement and
 does not guarantee that SQL is safe.
 
-**Current release: [v0.6.0](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0)**
+**Current release: [v0.7.0](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.7.0)**
 (pre-1.0), a portable Windows x64 app, plus an unsigned macOS (Apple Silicon)
 build.
 
@@ -42,6 +42,11 @@ database connected, so the result is static analysis only.*
   connection. Company servers are reached only through a local connector, for
   targets an operator has approved, over verified TLS. Each result says what
   evidence was collected, not collected, or failed.
+- **Suggests what to check for performance (advisory).** For a single `SELECT`
+  it notes a `LIKE` pattern that starts with a wildcard, a filtered column inside
+  a function or calculation, and `ORDER BY RAND()`, with caveats and how to
+  verify. This advice comes from fixed rules, never changes the risk result,
+  does not rewrite the SQL and is not a full performance review.
 - **Keeps credentials out of storage.** Logins are used for one operation and
   never saved.
 
@@ -57,7 +62,14 @@ database connected, so the result is static analysis only.*
   such as `SELECT ... INTO` in any position (`INTO OUTFILE`, `INTO @var`).
   When the statements cannot be told apart reliably (for example an
   unterminated string), the whole input is one unreadable result. A statement
-  the parser reads in full is not proof that MySQL accepts it.
+  the parser reads in full is not proof that MySQL accepts it. Statements the
+  parser reads only by their first keyword (`PREPARE`, `EXECUTE`,
+  `LOCK TABLES`, `RENAME TABLE`, `OPTIMIZE TABLE`, `GRANT`, `CREATE USER`,
+  `REPLACE`, ...), `KILL`, `SET` of anything but user variables, and
+  `START REPLICA` are not analysed either. Execution risk is not assessed from
+  the SQL alone; with an execution plan it reports the optimizer's estimates.
+  Results show each statement's SQL as submitted, without comments before or
+  after it.
 - **A `SELECT` is not always a plain read.** A `SELECT` with a locking clause
   (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`), or one that calls a
   function outside the validator's reviewed list of MySQL built-ins (a stored
@@ -108,13 +120,13 @@ Details: the
 ## Download and run
 
 Download from the
-[v0.6.0 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0).
+[v0.7.0 release page](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.7.0).
 Each file has a matching `.sha256` checksum file there.
 
 | Platform | File | Status |
 | --- | --- | --- |
-| Windows x64 | `MySQL-DBA-Validator-v0.6.0-windows-x64.zip` | Built, audited and smoke-tested in CI; the release notes say which checks the maintainer repeated on the published zip |
-| macOS, Apple Silicon only | `MySQL-DBA-Validator-v0.6.0-macos-arm64-unsigned.zip` | Built, audited and smoke-tested in CI only; ad hoc signed, not notarized |
+| Windows x64 | `MySQL-DBA-Validator-v0.7.0-windows-x64.zip` | Built, audited and smoke-tested in CI; the release notes say which checks the maintainer repeated on the published zip |
+| macOS, Apple Silicon only | `MySQL-DBA-Validator-v0.7.0-macos-arm64-unsigned.zip` | Built, audited and smoke-tested in CI only; ad hoc signed, not notarized |
 
 **Windows**
 
@@ -122,7 +134,7 @@ Each file has a matching `.sha256` checksum file there.
    `.sha256` file:
 
    ```powershell
-   Get-FileHash .\MySQL-DBA-Validator-v0.6.0-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\MySQL-DBA-Validator-v0.7.0-windows-x64.zip -Algorithm SHA256
    ```
 
 2. Extract the zip anywhere, for example `C:\Tools\`. No installer or Python
@@ -140,17 +152,17 @@ covers local evidence, company targets and troubleshooting.
 **macOS (Apple Silicon)**
 
 Check the download with
-`shasum -a 256 -c MySQL-DBA-Validator-v0.6.0-macos-arm64-unsigned.zip.sha256`,
+`shasum -a 256 -c MySQL-DBA-Validator-v0.7.0-macos-arm64-unsigned.zip.sha256`,
 unzip it, and move `MySQL DBA Validator.app` to Applications. macOS blocks the
 first launch because the app is not notarized; the
-[release notes](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.6.0)
+[release notes](https://github.com/realspinn/mysql-dba-validator/releases/tag/v0.7.0)
 explain how to open it.
 
-**Update notice.** When a newer official release exists, the page shows a
-small notice with a link to its release notes; you can dismiss it. Nothing
-is downloaded or installed. To check, the app asks GitHub once per start for
-the latest release: GitHub sees your IP address and the installed version,
-and no SQL, login or connection details are sent. Set
+**Update notice (since v0.7.0).** When a newer official release exists, the
+page shows a small notice with a link to its release notes; you can dismiss
+it. Nothing is downloaded or installed. To check, the app asks GitHub once per
+start for the latest release: GitHub sees your IP address and the installed
+version, and no SQL, login or connection details are sent. Set
 `MDV_UPDATE_CHECK=off` to turn it off; see
 [SECURITY.md](SECURITY.md#security-model-in-brief).
 

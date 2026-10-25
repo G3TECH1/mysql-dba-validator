@@ -30,7 +30,7 @@ than a recorded one.
 | Results page rendering of every evidence state | Real headless Chrome, driven by real API responses (part of the test suite) |
 | Local web app and connector together in a browser | Real headless Chrome, with company MySQL replaced by a stand-in |
 | Windows portable release | Built by CI from the release tag, audited, smoke-tested from the extracted zip. The published v0.6.0 zip's checksum was re-checked on the maintainer's machine; its smoke test and artifact audit ran in CI only (below) |
-| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0, v0.5.1 or v0.6.0. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
+| Local database evidence against real MySQL | **Verified by the maintainer** with the Sakila sample database (below), on code before v0.5.0; not repeated for v0.5.0, v0.5.1, v0.6.0 or the v0.7.0 candidate. Also covered by automated tests with a fake MySQL that models MySQL's read-only behaviour (error 1792) |
 | Remote/company workflow (local connector) end to end against a real MySQL server | **Reported by the maintainer** (manual test, recorded after the v0.4.1 release): successful on Windows against an AWS RDS for MySQL test database the maintainer created. No transcript or logs were provided for this record; see [below](#remote-workflow-against-aws-rds-for-mysql-maintainer-reported) |
 | Real company MySQL, VPN/LAN connectivity, company-issued TLS, hosted HTTPS frontend | **Not verified** |
 | Positive M1 metadata adjustment against a live large table | **Not verified.** It needs a collected `UPDATE`/`DELETE` plan. In v0.4.1 only the remote connector path collected one; since v0.5.0 neither path does (see below), so M1 does not arise in practice. Automated tests only |
@@ -80,6 +80,20 @@ section). The suite covers, among others:
 - **Page and packaging:** `test_frontend_served_page.py`,
   `test_frontend_evidence_rendering.py` (real Chrome; skipped if Chrome is not
   installed), `test_heartbeat.py`, `test_release_packaging.py`.
+- **Honest assessment:** `test_honest_assessment.py`: statements the parser
+  reads only by their keyword, `KILL`, `SET` of server or session settings and
+  `START REPLICA` are not analysed; execution risk is not assessed without a
+  plan and reports a plan's estimates as estimates; `sql` is the submitted
+  text while the EXPLAIN sent is unchanged; validation logs no SQL or login.
+- **Optimization advice:** `test_optimization_advice.py`: each rule's pattern,
+  preconditions and non-matches; only an analysed, non-locking single `SELECT`
+  is checked; replacing or breaking the adviser changes nothing else in the
+  result or sent to the (fake) database; no rewritten SQL, no network or
+  database access, no SQL logged. The page shows it collapsed beside the result,
+  and the "AI Advisor — Coming Soon" note has no control but a close button,
+  which hides it until the page is reloaded and stores nothing
+  (`test_frontend_evidence_rendering.py`, real Chrome). Whether the advice
+  helps on a real server has not been tested.
 - **Update notice:** `test_update_check.py`: version comparison, every
   failure path (HTTP 403/404/429, offline, timeout, TLS, malformed or
   unexpected JSON, a non-official release page), the exact request, caching,
@@ -242,6 +256,63 @@ in the sections above are for earlier states of the tree), any CI run of this
 tree (the macOS CI result recorded for v0.5.1 applies to v0.5.1 only), a real
 Mac (including approval prompts in Terminal), MySQL 8.4, a packaged build, and
 company infrastructure, VPN and TLS.
+
+## Unreleased: v0.7.0 candidate, local checks
+
+Branch `release/v0.7.0-prep`, 2026-10-25 (not released), on
+`6f2d821` (`main`): `91148ee` (statements the validator cannot fully assess
+are not analysed, SQL shown as submitted, Execution Risk without a plan, parser
+logging silenced), `8452e4e` (optimization adviser), `3e3338d` (AI Advisor
+teaser, update notice layout) and the version bump to 0.7.0.
+
+| Check | Result | Where |
+| --- | --- | --- |
+| Full suite on each commit | `91148ee`: 1861 passed, 4 skipped. `8452e4e`: 1931 passed, 4 skipped. With the version bump: 1936 passed, 4 skipped. The skips are the platform-only ones (three symbolic-link or POSIX tests that run on macOS, one POSIX probe) | Maintainer's Windows 10 machine, Python 3.13.5, sqlglot 30.21.0 (the release pin); FastAPI 0.141.1, pydantic 2.11.7, PyMySQL 1.2.0, older than the release pins |
+| Full suite with the version bump, other sqlglot versions | 1936 passed, 4 skipped on 30.17.0 and on 30.24.0 | Same machine |
+| `pip check` | No broken requirements | Same machine |
+| Version | `/api/health`, the FastAPI app and `release/build_windows.py` report 0.7.0 | Same machine |
+| The running app in headless Chrome (ad hoc scripts, not in the repository) | Update notice: shown from a simulated `update_available` answer given in the browser (the server ran with `MDV_UPDATE_CHECK=off`), closed with the keyboard, still dismissed after a reload. AI Advisor teaser: closed with the keyboard, still closed after the next validation, nothing written to browser storage or cookies, shown again after a reload. Both close buttons show a focus outline in the light and dark themes; no horizontal scrolling at 390 px; no request left 127.0.0.1 | Same machine, on the tree of `3e3338d` |
+
+Not shown by these local checks: any MySQL server, a real Mac, and a screen
+reader. CI, the release builds and one real update check are in the next
+section.
+
+## v0.7.0 candidate: CI on `5f604a9` (not released)
+
+Run on 2026-10-25 at `5f604a9828e180be3d9d7a3a40bed4b4223bf652`, the head of
+`release/v0.7.0-prep` (the four commits above), through pull request
+[#6](https://github.com/realspinn/mysql-dba-validator/pull/6). Both release
+workflows were run by hand (`workflow_dispatch`) on that branch. These are
+validation builds, not release builds: no tag, draft or release was created.
+
+| Check | Windows | macOS |
+| --- | --- | --- |
+| CI (pull request), run [40148573700](https://github.com/realspinn/mysql-dba-validator/actions/runs/40148573700) | `Tests (windows-latest)` passed: 1938 passed, 2 skipped; `pip check` passed. This job has no unexpected-skip check | `Tests (macos-15)` passed: 1939 passed, 1 skipped (the Windows Job Object test); skip check: 1940 tests, 1 skipped, 0 unexpected; `pip check` passed |
+| Release workflow run | [40148610155](https://github.com/realspinn/mysql-dba-validator/actions/runs/40148610155) | [40148613031](https://github.com/realspinn/mysql-dba-validator/actions/runs/40148613031) |
+| Runner, Python | Windows Server 2025 (`windows-2025-vs2026`, GitHub-hosted), Python 3.14.9, x64 | macOS 15.7.9 (`macos-15-arm64`, GitHub-hosted Apple Silicon), Python 3.14.7 |
+| Test environment (installed from `requirements.txt`, CI and release runs) | PyMySQL 1.2.3, sqlglot 30.24.0, cryptography 45.0.7, pytest 9.1.1 | The same versions |
+| Test suite in the release run | 1938 passed, 2 skipped; `pip check` passed | 1939 passed, 1 skipped; skip check: 1940 tests, 1 skipped, 0 unexpected; `pip check` passed |
+| Build and artifact audit | Portable build passed (PyInstaller 6.22.3); audit passed on the folder and the zip: 119 files, 2188 embedded modules, 0 secret values checked | Unsigned app build passed (PyInstaller 6.22.3); audit passed on the app and the `ditto` zip: 112 files, 2224 embedded modules, 0 secret values checked, expected version 0.7.0 |
+| Smoke test (includes the packaged app reporting the release version) | 55 checks passed, 0 failed | 49/49 |
+| Artifact | `MySQL-DBA-Validator-v0.7.0-windows-x64.zip`, SHA256 `94f37b7a4f07553adb3bcc3a46fa4d956f03755545b1619334abdd5de26c38ab` (workflow artifact `windows-x64-portable`) | `MySQL-DBA-Validator-v0.7.0-macos-arm64-unsigned.zip`, SHA256 `be27d3afe4f2cd315e772c46caffebca04fbeebfb7dd47f63f7fb0a5841df4dd` (workflow artifact `macos-arm64-unsigned-5f604a9…`) |
+| Release, signing, notarization, publishing | "Tag matches backend/version.py" and "Create draft GitHub Release" skipped | "Tag matches backend/version.py", `publish-unsigned`, `sign-notarize`, `verify-signed` and `publish` skipped |
+
+These zips were not downloaded or inspected on the maintainer's machine. A tag
+run rebuilds the zips, so the published checksums may differ from these.
+
+**Update check against the real GitHub API.** One request, on 2026-10-25, from
+the source tree at `5f604a9` on the maintainer's Windows machine (Python
+3.13.5), by calling `backend.update_check.check_for_update()` with
+`MDV_UPDATE_CHECK` unset. Result: `up_to_date`, as expected while v0.6.0 is
+the latest published release. This shows the fixed endpoint answered and was
+read under certificate and host-name verification. It does not show the
+`update_available` answer from the real API (simulated only, above), the check
+from a packaged build, or the macOS certificate behaviour.
+
+Not shown by these runs: a real-Mac acceptance pass (a CI run on a virtual Mac
+is not one, and the macOS zip is ad hoc signed only, not notarized), any live
+MySQL server, MySQL 8.4, a screen reader, a signed build, and company
+infrastructure, VPN and TLS.
 
 ## v0.6.0 candidate: CI on `3b38133` (not released)
 

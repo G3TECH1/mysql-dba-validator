@@ -59,6 +59,15 @@
 			--critical-border: #efb1aa;
 			--critical-solid: #c4261a;
 			--on-critical: #ffffff;
+			/* AI Advisor teaser only: a teal-to-violet tint, kept quieter than the risk colours. */
+			--ai-1: #0f766e;
+			--ai-2: #6d4fd8;
+			--ai-on: #ffffff;
+			--ai-text: #5b3fc4;
+			--ai-soft: rgba(109, 79, 216, .07);
+			--ai-edge-1: rgba(15, 118, 110, .32);
+			--ai-edge-2: rgba(109, 79, 216, .34);
+			--ai-glow: rgba(109, 79, 216, .22);
 			--shadow: 0 1px 2px rgba(16, 24, 40, .05);
 			--radius: 10px;
 			--radius-sm: 6px;
@@ -108,6 +117,14 @@
 			--critical-border: rgba(255, 107, 96, .5);
 			--critical-solid: #e5483b;
 			--on-critical: #ffffff;
+			--ai-1: #3cc4b4;
+			--ai-2: #a48cff;
+			--ai-on: #0d1015;
+			--ai-text: #c3b5ff;
+			--ai-soft: rgba(164, 140, 255, .08);
+			--ai-edge-1: rgba(60, 196, 180, .34);
+			--ai-edge-2: rgba(164, 140, 255, .38);
+			--ai-glow: rgba(164, 140, 255, .2);
 			--shadow: none
 		}
 
@@ -152,6 +169,14 @@
 				--critical-border: rgba(255, 107, 96, .5);
 				--critical-solid: #e5483b;
 				--on-critical: #ffffff;
+				--ai-1: #3cc4b4;
+				--ai-2: #a48cff;
+				--ai-on: #0d1015;
+				--ai-text: #c3b5ff;
+				--ai-soft: rgba(164, 140, 255, .08);
+				--ai-edge-1: rgba(60, 196, 180, .34);
+				--ai-edge-2: rgba(164, 140, 255, .38);
+				--ai-glow: rgba(164, 140, 255, .2);
 				--shadow: none
 			}
 		}
@@ -611,27 +636,120 @@
 			font-size: 14px
 		}
 
-		/* Update notice: in the page flow, never over the review. */
+		/* Update notice: in the page flow, never over the review. A compact row with an
+		   accent hairline, like the AI Advisor teaser but quieter. */
 		.update-notice {
-			display: flex;
-			flex-wrap: wrap;
+			display: grid;
+			grid-template-columns: auto minmax(0, 1fr) auto auto;
+			grid-template-areas: "icon body link close";
 			align-items: center;
-			gap: 8px 14px;
+			gap: 4px 12px;
 			margin-bottom: 16px;
-			padding: 10px 14px;
-			background: var(--accent-soft);
-			border: 1px solid var(--border);
-			border-radius: var(--radius-sm);
+			padding: 10px 10px 10px 12px;
+			border: 1px solid transparent;
+			border-radius: var(--radius);
+			background:
+				radial-gradient(90% 180% at 0% 50%, var(--accent-soft), transparent 70%) padding-box,
+				linear-gradient(var(--surface), var(--surface)) padding-box,
+				linear-gradient(120deg, var(--focus), var(--border)) border-box;
 			color: var(--text)
 		}
 
-		.update-notice a {
-			color: var(--accent-text);
-			font-weight: 600
+		.update-icon {
+			display: grid;
+			grid-area: icon;
+			place-items: center;
+			width: 30px;
+			height: 30px;
+			border-radius: 8px;
+			background: var(--accent-soft);
+			color: var(--accent-text)
 		}
 
-		.update-notice button {
-			margin-left: auto
+		.update-icon svg {
+			width: 16px;
+			height: 16px;
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 2;
+			stroke-linecap: round;
+			stroke-linejoin: round
+		}
+
+		.update-body {
+			grid-area: body;
+			min-width: 0;
+			font-size: 13px;
+			line-height: 1.4
+		}
+
+		.update-title {
+			margin-right: 6px;
+			font-weight: 650
+		}
+
+		#updateNoticeText {
+			color: var(--text-2)
+		}
+
+		.update-note {
+			display: block;
+			color: var(--text-3);
+			font-size: 12px
+		}
+
+		.update-notice a {
+			grid-area: link;
+			color: var(--accent-text);
+			font-size: 12.5px;
+			font-weight: 600;
+			text-decoration: none;
+			white-space: nowrap
+		}
+
+		.update-notice a:hover {
+			text-decoration: underline
+		}
+
+		.update-notice .close-x {
+			grid-area: close
+		}
+
+		@media (max-width: 560px) {
+			.update-notice {
+				grid-template-columns: auto minmax(0, 1fr) auto;
+				grid-template-areas: "icon body close" ". link .";
+				align-items: start
+			}
+
+			.update-notice a {
+				justify-self: start
+			}
+		}
+
+		/* A small × to close a notice or teaser: quiet until hovered or focused. */
+		button.close-x {
+			width: 28px;
+			height: 28px;
+			padding: 0;
+			border-color: transparent;
+			background: transparent;
+			color: var(--text-3)
+		}
+
+		button.close-x:hover:not(:disabled) {
+			border-color: transparent;
+			background: var(--surface-3);
+			color: var(--text)
+		}
+
+		button.close-x svg {
+			width: 14px;
+			height: 14px;
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 2;
+			stroke-linecap: round
 		}
 
 		button:focus-visible {
@@ -1041,6 +1159,113 @@
 		.layer.final {
 			grid-column: 1/-1;
 			background: var(--surface-2)
+		}
+
+		.layer.optimization p {
+			margin: 0 0 6px
+		}
+
+		/* Caveats read like the suggested action, not brighter than it. */
+		.layer.optimization .caveats {
+			margin-bottom: 6px;
+			color: var(--text-2);
+			font-weight: 400
+		}
+
+		/* AI Advisor teaser: a label for a future feature, not a control. A gradient hairline
+		   and a faint wash keep it distinct but quieter than the risk assessment above. */
+		.ai-teaser {
+			display: flex;
+			align-items: flex-start;
+			gap: 14px;
+			margin-top: 20px;
+			padding: 16px 18px;
+			border: 1px solid transparent;
+			border-radius: var(--radius);
+			background:
+				radial-gradient(120% 160% at 0% 0%, var(--ai-soft), transparent 62%) padding-box,
+				linear-gradient(var(--surface), var(--surface)) padding-box,
+				linear-gradient(120deg, var(--ai-edge-1), var(--ai-edge-2)) border-box;
+			box-shadow: 0 12px 28px -20px var(--ai-glow)
+		}
+
+		.ai-mark {
+			display: grid;
+			flex: none;
+			place-items: center;
+			width: 36px;
+			height: 36px;
+			border-radius: 10px;
+			background: linear-gradient(135deg, var(--ai-1), var(--ai-2));
+			box-shadow: 0 6px 16px -8px var(--ai-glow);
+			color: var(--ai-on)
+		}
+
+		.ai-mark svg {
+			width: 20px;
+			height: 20px;
+			fill: currentColor
+		}
+
+		.ai-teaser-body {
+			flex: 1;
+			min-width: 0
+		}
+
+		.ai-teaser .close-x {
+			flex: none;
+			margin: -6px -8px 0 0
+		}
+
+		.ai-teaser-head {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px
+		}
+
+		.ai-teaser-title {
+			color: var(--text);
+			font-size: 14px;
+			font-weight: 650;
+			letter-spacing: -.005em
+		}
+
+		.ai-badge {
+			padding: 2px 8px;
+			border: 1px solid var(--ai-edge-2);
+			border-radius: 999px;
+			background: var(--ai-soft);
+			color: var(--ai-text);
+			font-size: 10px;
+			font-weight: 700;
+			letter-spacing: .1em
+		}
+
+		.ai-teaser-text {
+			margin: 4px 0 0;
+			color: var(--text-2);
+			font-size: 13px;
+			line-height: 1.5
+		}
+
+		.ai-privacy {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			margin: 8px 0 0;
+			color: var(--text-3);
+			font-size: 12px
+		}
+
+		.ai-privacy svg {
+			flex: none;
+			width: 13px;
+			height: 13px;
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 1.8;
+			stroke-linejoin: round
 		}
 
 		.layer h3 {
@@ -2536,9 +2761,14 @@
 
 		<main>
 			<div class="update-notice" id="updateNotice" role="status" hidden>
-				<span id="updateNoticeText"></span>
+				<span class="update-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 16V8M8.5 11.5 12 8l3.5 3.5"/><circle cx="12" cy="12" r="9"/></svg></span>
+				<div class="update-body">
+					<strong class="update-title">Update available</strong>
+					<span id="updateNoticeText"></span>
+					<span class="update-note">Nothing is downloaded or installed automatically.</span>
+				</div>
 				<a id="updateNoticeLink" target="_blank" rel="noopener noreferrer">Release notes</a>
-				<button type="button" class="secondary" id="updateNoticeDismiss">Dismiss</button>
+				<button type="button" class="close-x" id="updateNoticeDismiss" aria-label="Dismiss update notice" title="Dismiss"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
 			</div>
 			<section class="view" id="dashboardView" aria-labelledby="dashboardHeading">
 				<header class="view-head">
@@ -3774,7 +4004,8 @@
 				]),
 				reasoningDetails(s),
 				evidenceLayer(s),
-				metadataLayer(s)
+				metadataLayer(s),
+				...(s.optimization ? [optimizationDetails(s.optimization)] : [])
 			);
 			body.append(layers);
 			card.append(body);
@@ -3794,6 +4025,91 @@
 				])
 			);
 			return box;
+		}
+
+		// Optimization advice: separate from the risk result, collapsed by default. Every item
+		// is an observation from the SQL; nothing here is measured or claims a speed-up.
+		function optimizationDetails(o) {
+			const items = o.recommendations || [];
+			const box = el('details', 'reasoning optimization');
+			const summary = o.status === 'advised'
+				? 'Optimization advice: ' + items.length + ' observation' + (items.length === 1 ? '' : 's')
+				: o.status === 'none_found' ? 'Optimization advice: no observations from the rules checked'
+				: 'Optimization advice: not checked';
+			box.append(el('summary', '', summary + ' (advisory; does not change the risk score)'));
+			const children = [];
+			if (o.status === 'not_eligible' || o.status === 'unavailable') {
+				children.push(el('p', 'muted', o.reason || 'Optimization advice could not be produced for this statement.'));
+			} else if (!items.length) {
+				children.push(el('p', 'muted', 'The rules checked are: a LIKE pattern that starts with a wildcard, a filtered column inside a function or calculation, and ORDER BY RAND(). This is not a full performance review.'));
+			}
+			items.forEach(item => {
+				const caveats = plainList(item.caveats, 'No caveats reported.');
+				caveats.classList.add('caveats');
+				children.push(
+					el('div', 'subheading', text(item.title) + ' (observed in the SQL)'),
+					el('p', '', item.observation),
+					el('p', '', 'Suggested action: ' + item.action),
+					el('p', 'muted', 'Why: ' + item.reasoning),
+					el('p', 'caveats-label', 'Caveats:'),
+					caveats,
+					el('p', 'muted', 'How to verify: ' + item.verify)
+				);
+			});
+			box.append(layer('OPTIMIZATION', 'optimization', children));
+			return box;
+		}
+
+		// A future feature, shown as a label only: no action, no request, nothing sent anywhere.
+		// The marks are inline SVG built here (no external asset) and hidden from screen readers.
+		function svgIcon(viewBox, paths) {
+			const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+			svg.setAttribute('viewBox', viewBox);
+			svg.setAttribute('aria-hidden', 'true');
+			svg.setAttribute('focusable', 'false');
+			paths.forEach(d => {
+				const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+				path.setAttribute('d', d);
+				svg.append(path);
+			});
+			return svg;
+		}
+
+		// Closing the teaser lasts until the page is reloaded: kept in memory only, never stored.
+		let aiTeaserClosed = false;
+
+		function aiAdvisorNote() {
+			const note = el('aside', 'ai-teaser');
+			note.setAttribute('aria-label', 'AI Advisor, coming soon');
+			const mark = el('div', 'ai-mark');
+			mark.append(svgIcon('0 0 24 24', [
+				'M11 3c.5 4.6 2.9 7 7.5 7.5-4.6.5-7 2.9-7.5 7.5-.5-4.6-2.9-7-7.5-7.5C8.1 10 10.5 7.6 11 3z',
+				'M18.5 15c.2 1.6 1 2.3 2.5 2.5-1.5.2-2.3 1-2.5 2.5-.2-1.5-1-2.3-2.5-2.5 1.5-.2 2.3-.9 2.5-2.5z'
+			]));
+			const head = el('div', 'ai-teaser-head');
+			head.append(el('span', 'ai-teaser-title', 'AI Advisor'), el('span', 'ai-badge', 'COMING SOON'));
+			const privacy = el('p', 'ai-privacy');
+			privacy.append(svgIcon('0 0 24 24', ['M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z']),
+				el('span', '', 'No SQL is sent to an AI service.'));
+			const body = el('div', 'ai-teaser-body');
+			body.append(head,
+				el('p', 'ai-teaser-text', 'Deeper SQL explanations and intelligent optimization suggestions, with optional AI assistance in a future version.'),
+				privacy);
+			const close = el('button', 'close-x');
+			close.type = 'button';
+			close.title = 'Dismiss';
+			close.setAttribute('aria-label', 'Dismiss AI Advisor teaser');
+			close.append(svgIcon('0 0 24 24', ['M6 6l12 12M18 6 6 18']));
+			close.onclick = () => {
+				aiTeaserClosed = true;
+				// Keyboard users keep their place: focus moves to the nearest control above.
+				const previous = [...$('results').querySelectorAll('summary')].pop();
+				const hadFocus = document.activeElement === close;
+				note.remove();
+				if (hadFocus && previous) previous.focus({ preventScroll: true });
+			};
+			note.append(mark, body, close);
+			return note;
 		}
 
 		const PLAN_COUNT_LABELS = {
@@ -4349,6 +4665,7 @@
 			data.statements.forEach((statement, index) => {
 				$('results').append(statementCard(statement, index));
 			});
+			if (!aiTeaserClosed) $('results').append(aiAdvisorNote());
 			renderOverview('complete', data);
 		}
 
@@ -4498,8 +4815,8 @@
 				return;
 			}
 			const current = typeof data.current === 'string' && UPDATE_VERSION.test(data.current) ? data.current : '';
-			$('updateNoticeText').textContent = 'MySQL DBA Validator ' + version + ' is available'
-				+ (current ? ' (you have ' + current + ').' : '.');
+			$('updateNoticeText').textContent = 'MySQL DBA Validator ' + version
+				+ (current ? ' · you have ' + current : '');
 			$('updateNoticeLink').href = RELEASE_PAGE + version;
 			$('updateNoticeDismiss').onclick = () => {
 				updateDismissedHere = version;

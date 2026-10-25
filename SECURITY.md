@@ -93,6 +93,12 @@ How the components and request flows fit together is described in
   connector.
 - API responses, including request-validation errors, do not include submitted
   credential values.
+- Submitted SQL is not logged. The SQL parser's own warnings quote the whole
+  statement (including any password in `ALTER USER ... IDENTIFIED BY`); in
+  v0.6.0 and earlier they reached `backend.log` and the connector console.
+  They are silenced since v0.7.0. The log is replaced each time the app starts
+  and can be deleted: `%LOCALAPPDATA%\MySQLDBAValidator\logs\backend.log` on
+  Windows, `~/.local/state/MySQLDBAValidator/logs/backend.log` on macOS.
 - **Update check (the only request to the internet).** When the page opens,
   the web app asks GitHub for the latest official release, at most once per
   start: one `GET` with no body to

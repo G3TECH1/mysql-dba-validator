@@ -276,6 +276,8 @@ Each statement result also carries (since v0.5.0):
 | `scope` | `{basis, source, table, index, columns, factor}`: what is established about the rows an `UPDATE`/`DELETE` matches (see Risk scoring). `source` is `sql` for `all_rows`, `table_metadata` for `at_most_one_row`, otherwise `null`; `factor` is the score credit, if any |
 | `confidence` / `static_confidence` | The final and the SQL-only confidence |
 | `analysis_text_differs` | Kept for compatibility and now always `false`: a statement the parser cannot read in full is not analysed (`analysis_status` `unreadable` or `invalid`) rather than scored from a partial reading |
+| `optimization` | Advisory observations from the SQL alone (`backend.optimization`), computed after the result is final; they never change it. See [evidence contract §10.6](docs/v2-database-evidence-contract.md) |
+| `sql` | The statement exactly as submitted, without comments before or after it (one exception: [evidence contract §10.6](docs/v2-database-evidence-contract.md)). An analysed statement is analysed, and any `EXPLAIN` is built, from the parser's regeneration of it (`parser.StatementFacts.raw_sql`), which is not shown |
 | `v2_assessment` | Its `overall_score`, `risk_level` and `confidence` equal the statement's (they were placeholders, `0` / `UNKNOWN`, in v0.4.1 and earlier); its suggested checks are guidance, never SQL built from the submitted text |
 
 The batch adds `overall_confidence`, the lowest statement confidence (`null`

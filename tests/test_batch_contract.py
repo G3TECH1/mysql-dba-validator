@@ -266,7 +266,8 @@ def test_double_minus_before_a_non_space_is_two_minus_signs():
     # Was read as a comment from "--1": the WHERE vanished and a one-row UPDATE was
     # CRITICAL ("no WHERE clause") with HIGH confidence.
     statement = only("UPDATE accounts SET balance = balance--1 WHERE id = 1")
-    assert statement["sql"] == "UPDATE accounts SET balance = balance - -1 WHERE id = 1"
+    # Shown exactly as submitted; it is analysed as balance - -1.
+    assert statement["sql"] == "UPDATE accounts SET balance = balance--1 WHERE id = 1"
     assert statement["analysis_status"] == "analysed" and statement["has_where"] is True
     assert score(statement) == score(only("UPDATE accounts SET balance = balance - -1 WHERE id = 1"))
 

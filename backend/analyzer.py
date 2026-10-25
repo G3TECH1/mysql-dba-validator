@@ -29,7 +29,7 @@ from .risk_engine import (
 
 
 # Static-view reason; backend.evidence_state restates it when evidence was attempted.
-OFFLINE_EXECUTION_REASON = "Execution plan and row estimates unavailable in offline mode."
+OFFLINE_EXECUTION_REASON = "Not assessed: no execution plan or row estimates are available in offline mode."
 
 
 def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
@@ -303,13 +303,11 @@ def analyze_statement(facts: StatementFacts) -> models.StatementAnalysis:
 
     dimensions.append(models.RiskDimension(name="Data Risk", level=data_level, reason=data_reason))
 
-    # Execution Risk
-    if confidence != "HIGH":
-        exec_level = "UNKNOWN"
-        exec_reason = OFFLINE_EXECUTION_REASON
-    else:
-        exec_level = "LOW"
-        exec_reason = "Offline analysis indicates low execution risk from statement alone."
+    # Execution Risk: not assessed from the SQL alone, whatever the confidence (confidence
+    # is about the risk assessment, not about how the statement runs). With database
+    # evidence, backend.evidence_state and main restate it from what was collected.
+    exec_level = "UNKNOWN"
+    exec_reason = OFFLINE_EXECUTION_REASON
 
     if stmt_type == "ALTER" and facts.is_full_table_ddl:
         exec_level = "MEDIUM"

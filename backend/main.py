@@ -43,6 +43,7 @@ from .risk_engine import (
     weakest_confidence,
 )
 from .analyzer import analyze_batch
+from .optimization import advise
 from .parser import has_executable_comment, parse_sql, unsupported_script
 from .version import APP_VERSION
 from .update_check import check_for_update
@@ -597,6 +598,14 @@ def apply_scope_adjustment(report, scope: dict):
             factor, floor_applied)
 
 
+def plan_estimate_reason(evidence: DatabaseEvidence, high_rows: bool) -> str:
+    """The Execution Risk reason when a collected plan's estimates raised the score."""
+    estimates = (["a full table scan"] if evidence.full_table_scan is True else []) + (
+        [f"about {evidence.estimated_rows:,} rows examined"] if high_rows else [])
+    return ("Execution plan collected: the optimizer estimates " + " and ".join(estimates)
+            + ". These are estimates, not a measured runtime.")
+
+
 def _cap(level: str, ceiling: str) -> str:
     return level if CONFIDENCE_ORDER[level] <= CONFIDENCE_ORDER[ceiling] else ceiling
 
@@ -670,7 +679,8 @@ def build_statement_result(static_report, analysis, evidence: DatabaseEvidence,
 
     payload = {
         "index": final_report.facts.index,
-        "sql": final_report.facts.raw_sql,
+        # As submitted; raw_sql of an analysed statement is the parser's regeneration.
+        "sql": final_report.facts.submitted_sql or final_report.facts.raw_sql,
         "statement_type": final_report.facts.statement_type,
         "category": final_report.facts.category,
         "tables": final_report.facts.tables,
@@ -711,9 +721,24 @@ def build_statement_result(static_report, analysis, evidence: DatabaseEvidence,
         "checklist": final_report.checklist,
     }
 
+    # Advisory only, from the SQL alone, after the result above is final: it never
+    # changes the score, confidence, completeness or evidence (backend.optimization).
+    try:
+        payload["optimization"] = advise(final_report.facts)
+    except Exception:
+        payload["optimization"] = {"status": "unavailable", "recommendations": []}
+
     if analysis.assessment is not None:
         try:
             assessment = restate_assessment(analysis.assessment, state)
+            if evidence_result.factors:
+                # The plan's estimates raised the score (full table scan, high row
+                # estimate): the execution dimension says so, as optimizer estimates.
+                reason = plan_estimate_reason(evidence, evidence_result.high_estimated_rows_applied)
+                assessment = replace(assessment, dimensions=[
+                    replace(dimension, level="MEDIUM", reason=reason)
+                    if dimension.name == "Execution Risk" and dimension.level == "UNKNOWN" else dimension
+                    for dimension in assessment.dimensions])
             # The analyzer's score fields are placeholders; never return them as a result.
             assessment = replace(assessment, overall_score=final_report.score,
                                  risk_level=final_report.risk_level, confidence=confidence)
