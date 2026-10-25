@@ -1,15 +1,15 @@
-﻿"""
-Database evidence scaffold
 
-Provides a DBConfig and DBClient implementation that lazily uses PyMySQL
-when the environment is configured. The client stays read-only by default:
-if no environment variables are provided or the driver is missing, no
-network calls are made and the API returns explanatory statuses.
-
-To enable in future, set environment variables such as:
-
-  MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 """
+Database evidence scaffold
+Provides a DBConfig and DBClient implementation. Validation evidence uses
+the MySQL login supplied on the page for each request and does not use
+MYSQL_* environment variables. The client stays read-only by default.
+
+Legacy MYSQL_* environment variables and .env configuration are used only
+by the /api/health status check when a DBClient is created without an
+explicit configuration. They do not configure validation evidence.
+"""
+
 from __future__ import annotations
 
 import os
@@ -396,11 +396,14 @@ def discover_databases(
 
 
 class DBClient:
+    
     """A minimal DB client that uses pymysql when available.
 
     Safety:
-    - The client will not attempt any network activity unless environment
-      variables are provided and the pymysql driver can be imported.
+    - Validation evidence uses the MySQL login supplied with each request,
+      not environment variables.
+    - Legacy environment configuration may be used for the /api/health
+      status check when no explicit configuration is supplied.
     - execute_readonly enforces SELECT-only and a configurable LIMIT.
     """
 
