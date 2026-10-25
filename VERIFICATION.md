@@ -89,7 +89,9 @@ section). The suite covers, among others:
   preconditions and non-matches; only an analysed, non-locking single `SELECT`
   is checked; replacing or breaking the adviser changes nothing else in the
   result or sent to the (fake) database; no rewritten SQL, no network or
-  database access, no SQL logged. The page shows it collapsed beside the result
+  database access, no SQL logged. The page shows it collapsed beside the result,
+  and the "AI Advisor — Coming Soon" note has no control but a close button,
+  which hides it until the page is reloaded and stores nothing
   (`test_frontend_evidence_rendering.py`, real Chrome). Whether the advice
   helps on a real server has not been tested.
 - **Update notice:** `test_update_check.py`: version comparison, every

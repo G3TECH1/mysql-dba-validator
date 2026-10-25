@@ -268,15 +268,65 @@ for (const [name, data] of Object.entries(FIXTURES)) {
                        text: box.textContent } : null; })(),
       text: card.textContent,
     })),
+    aiAdvisor: [...root.querySelectorAll('.ai-teaser')].map(box => ({
+      label: box.getAttribute('aria-label'),
+      title: box.querySelector('.ai-teaser-title').textContent,
+      badge: box.querySelector('.ai-badge').textContent,
+      text: box.querySelector('.ai-teaser-text').textContent,
+      privacy: box.querySelector('.ai-privacy').textContent,
+      marks: [...box.querySelectorAll('svg')].map(svg => svg.getAttribute('aria-hidden')),
+      external: box.querySelectorAll('img, image, use, link, iframe, [src], [href]').length,
+      // The only control is the close button.
+      controls: box.querySelectorAll('a, button:not(.close-x), input, select, textarea, form, [onclick], [tabindex]').length,
+      close: [...box.querySelectorAll('button.close-x')].map(b => [b.type, b.getAttribute('aria-label'), b.textContent.trim()]),
+      inCard: !!box.closest('article.statement'),
+      afterCards: (() => { const cards = root.querySelectorAll('article.statement');
+        return !!(cards[cards.length - 1].compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING); })(),
+    })),
   };
 }
+// The AI Advisor teaser in each theme: text colours and the surface they sit on.
+renderResults(FIXTURES.optimization);
+const AI_THEMES = {};
+for (const theme of ['light', 'dark']) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const box = document.querySelector('.ai-teaser');
+  const colour = selector => getComputedStyle(box.querySelector(selector)).color;
+  AI_THEMES[theme] = {
+    surface: getComputedStyle(document.documentElement).getPropertyValue('--surface').trim(),
+    title: colour('.ai-teaser-title'), badge: colour('.ai-badge'), text: colour('.ai-teaser-text'),
+    privacy: colour('.ai-privacy'), mark: getComputedStyle(box.querySelector('.ai-mark')).backgroundImage,
+    titleSize: getComputedStyle(box.querySelector('.ai-teaser-title')).fontSize,
+  };
+}
+document.documentElement.removeAttribute('data-theme');
+// Closing the teaser: gone at once and for later results on this page, with nothing stored.
+const storageBefore = [localStorage.length, sessionStorage.length, document.cookie];
+const teaserCount = () => document.querySelectorAll('#results .ai-teaser').length;
+const AI_CLOSE = { before: teaserCount() };
+showView('review');  // the teaser is on the SQL review view; hidden elements take no focus
+const closeButton = document.querySelector('#results .ai-teaser .close-x');
+closeButton.focus();
+closeButton.click();
+AI_CLOSE.afterClick = teaserCount();
+// Focus stays near where it was (the last Optimization summary), not back at the top.
+AI_CLOSE.focusAfterClick = document.activeElement
+  === [...document.querySelectorAll('#results details.optimization summary')].pop();
+renderResults(FIXTURES.optimization);
+AI_CLOSE.afterNextResult = teaserCount();
+AI_CLOSE.storageUnchanged = JSON.stringify([localStorage.length, sessionStorage.length, document.cookie])
+  === JSON.stringify(storageBefore);
+aiTeaserClosed = false;  // as after a reload: nothing remembers it
+renderResults(FIXTURES.optimization);
+AI_CLOSE.afterReload = teaserCount();
 renderResults(FIXTURES.batch16);
 document.querySelectorAll('.stmt-index a')[9].click();
 const BATCH_FOCUS = document.activeElement.id;
 renderLoading();
 const RUNNING_OVERVIEW = overviewText();
 renderError('Validation failed: example');
-OUT.__states = { empty: EMPTY_OVERVIEW, running: RUNNING_OVERVIEW, failed: overviewText(), batchFocus: BATCH_FOCUS };
+OUT.__states = { empty: EMPTY_OVERVIEW, running: RUNNING_OVERVIEW, failed: overviewText(), batchFocus: BATCH_FOCUS,
+                 aiThemes: AI_THEMES, aiClose: AI_CLOSE };
 const out = document.createElement('pre');
 out.id = 'render-out';
 out.textContent = JSON.stringify(OUT);
@@ -563,6 +613,68 @@ def test_optimization_advice_is_a_collapsed_advisory_section(rendered):
     for name, view in out.items():
         if name != "__states":
             assert "Optimization" not in "".join(view["assessment"]) + view["overview"], name
+
+
+def test_the_ai_advisor_is_a_label_for_a_future_feature(rendered):
+    _, out = rendered
+    for name, view in out.items():
+        if name == "__states":
+            continue
+        assert len(view["aiAdvisor"]) == 1, name
+        note = view["aiAdvisor"][0]
+        assert (note["label"], note["title"], note["badge"]) == (
+            "AI Advisor, coming soon", "AI Advisor", "COMING SOON"), name
+        assert note["text"] == ("Deeper SQL explanations and intelligent optimization suggestions, "
+                                "with optional AI assistance in a future version.")
+        assert note["privacy"] == "No SQL is sent to an AI service."
+        # Decorative inline marks only (the third is the close icon): nothing loaded, below the
+        # statements, and no control but an accessible close button.
+        assert note["marks"] == ["true", "true", "true"] and note["external"] == 0, name
+        assert note["controls"] == 0 and note["inCard"] is False and note["afterCards"] is True, name
+        assert note["close"] == [["button", "Dismiss AI Advisor teaser", ""]], name
+
+
+def test_closing_the_ai_advisor_lasts_until_the_page_is_reloaded(rendered):
+    _, out = rendered
+    assert out["__states"]["aiClose"] == {"before": 1, "afterClick": 0, "focusAfterClick": True,
+                                          "afterNextResult": 0, "storageUnchanged": True, "afterReload": 1}
+    # In memory only: the dismissal code never touches browser storage or cookies.
+    page = FRONTEND.read_text(encoding="utf-8")
+    start = page.index("let aiTeaserClosed")
+    code = page[start:page.index("\n\t\t}\n", page.index("function aiAdvisorNote(", start))]
+    for persistent in ("localStorage", "sessionStorage", "cookie", "indexedDB"):
+        assert persistent not in code, persistent
+
+
+def contrast(foreground: str, background: str) -> float:
+    """WCAG contrast ratio of two colours given as rgb(...) or #rrggbb."""
+    def channels(colour):
+        colour = colour.strip()
+        if colour.startswith("#"):
+            return [int(colour[i:i + 2], 16) for i in (1, 3, 5)]
+        return [int(float(part)) for part in re.findall(r"[\d.]+", colour)[:3]]
+
+    def luminance(colour):
+        linear = [(c / 255) / 12.92 if c / 255 <= 0.03928 else ((c / 255 + 0.055) / 1.055) ** 2.4
+                  for c in channels(colour)]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    lighter, darker = sorted((luminance(foreground), luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_the_ai_advisor_reads_well_in_light_and_dark_themes(rendered):
+    _, out = rendered
+    themes = out["__states"]["aiThemes"]
+    assert themes["light"]["surface"] != themes["dark"]["surface"]
+    for theme, look in themes.items():
+        for part in ("title", "badge", "text", "privacy"):
+            assert contrast(look[part], look["surface"]) >= 4.5, (theme, part)
+        assert look["mark"].startswith("linear-gradient"), theme
+        # Secondary to the risk assessment: no larger than a statement heading.
+        assert look["titleSize"] == "14px", theme
+    for part in ("title", "badge", "text", "privacy", "mark"):
+        assert themes["light"][part] != themes["dark"][part], part
 
 
 def test_multi_row_plan_is_shown_without_a_first_row_summary(rendered):

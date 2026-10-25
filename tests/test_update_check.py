@@ -386,6 +386,29 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 50));
   OUT.rel = document.getElementById('updateNoticeLink').getAttribute('rel');
   OUT.target = document.getElementById('updateNoticeLink').getAttribute('target');
   OUT.position = getComputedStyle(notice).position;
+  const dismiss = document.getElementById('updateNoticeDismiss');
+  OUT.look = {
+    title: notice.querySelector('.update-title').textContent,
+    note: notice.querySelector('.update-note').textContent,
+    iconHidden: notice.querySelector('.update-icon').getAttribute('aria-hidden'),
+    dismissLabel: dismiss.getAttribute('aria-label'), dismissText: dismiss.textContent.trim(),
+    dismissType: dismiss.type, controls: notice.querySelectorAll('a, button, input, select, textarea').length,
+    external: notice.querySelectorAll('img, image, use, iframe, [src]').length,
+  };
+  OUT.themes = {};
+  for (const theme of ['light', 'dark']) {
+    document.documentElement.setAttribute('data-theme', theme);
+    getComputedStyle(dismiss).color;  // start the button's colour transition, then end it
+    document.getAnimations().forEach(animation => animation.finish());
+    const colour = node => getComputedStyle(node).color;
+    OUT.themes[theme] = {
+      surface: getComputedStyle(document.documentElement).getPropertyValue('--surface').trim(),
+      title: colour(notice.querySelector('.update-title')), text: colour(document.getElementById('updateNoticeText')),
+      note: colour(notice.querySelector('.update-note')), link: colour(document.getElementById('updateNoticeLink')),
+      dismiss: colour(dismiss), dismissBackground: getComputedStyle(dismiss).backgroundColor,
+    };
+  }
+  document.documentElement.removeAttribute('data-theme');
   OUT.beforeViews = !!(notice.compareDocumentPosition(document.getElementById('dashboardView'))
                        & Node.DOCUMENT_POSITION_FOLLOWING);
   OUT.rejected = {};
@@ -452,7 +475,29 @@ def banner(tmp_path_factory):
 def test_the_banner_is_hidden_until_a_newer_release_is_reported(banner):
     assert banner["initial"] is False and banner["afterFailedRequest"] is False
     assert banner["visible"] is True
-    assert banner["text"] == "MySQL DBA Validator 0.7.0 is available (you have 0.6.0)."
+    assert banner["text"] == "MySQL DBA Validator 0.7.0 · you have 0.6.0"
+
+
+def test_the_banner_is_a_compact_notice_with_an_accessible_close_control(banner):
+    assert banner["look"] == {
+        "title": "Update available", "note": "Nothing is downloaded or installed automatically.",
+        "iconHidden": "true", "dismissLabel": "Dismiss update notice", "dismissText": "",
+        "dismissType": "button", "controls": 2, "external": 0,
+    }
+
+
+def test_the_banner_reads_well_in_light_and_dark_themes(banner):
+    from tests.test_frontend_evidence_rendering import contrast
+
+    themes = banner["themes"]
+    assert themes["light"]["surface"] != themes["dark"]["surface"]
+    for theme, look in themes.items():
+        for part in ("title", "text", "note", "link", "dismiss"):
+            assert contrast(look[part], look["surface"]) >= 4.5, (theme, part)
+        # The close control is quiet: no filled button background until hovered.
+        assert look["dismissBackground"] == "rgba(0, 0, 0, 0)", theme
+    for part in ("title", "text", "link"):
+        assert themes["light"][part] != themes["dark"][part], part
 
 
 def test_the_banner_links_to_the_official_release_notes_and_does_not_cover_the_review(banner):
