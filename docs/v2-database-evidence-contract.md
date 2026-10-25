@@ -523,6 +523,18 @@ regeneration of it (`REGEXP` read as `REGEXP_LIKE()`, `LIMIT 20, 10` as
 but cannot be matched to their text, each analysed statement's `sql` is that
 regeneration instead (no input is known to do this).
 
+**Optimization advice (`optimization`).** Advisory only, computed after the
+result is final (`backend.optimization`): it never changes the score, the
+confidence, completeness, the evidence or what is sent to a database, and it
+rewrites, runs and measures nothing. `status` is `advised`, `none_found`,
+`not_eligible` (with a `reason`: not analysed, not a single SELECT, or a locking
+read) or `unavailable`. Each recommendation has `code`, `basis` (always `sql`:
+observed in the SQL; nothing from a plan or a measurement), `title`,
+`observation`, `action`, `reasoning`, `caveats` and `verify`. The rules are a
+`LIKE` pattern that starts with a wildcard and a filtered column inside a
+function or calculation (both only when the query reads one base table, with no
+join, subquery or CTE), and `ORDER BY RAND()`.
+
 **Whole request refused.** Local `/api/validate` returns HTTP 200
 `{"error": code}` (as for `statement_limit_exceeded`); the connector returns
 HTTP 400 with `error_code`. No statements, no risk level and no confidence are

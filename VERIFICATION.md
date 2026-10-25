@@ -85,6 +85,13 @@ section). The suite covers, among others:
   `START REPLICA` are not analysed; execution risk is not assessed without a
   plan and reports a plan's estimates as estimates; `sql` is the submitted
   text while the EXPLAIN sent is unchanged; validation logs no SQL or login.
+- **Optimization advice:** `test_optimization_advice.py`: each rule's pattern,
+  preconditions and non-matches; only an analysed, non-locking single `SELECT`
+  is checked; replacing or breaking the adviser changes nothing else in the
+  result or sent to the (fake) database; no rewritten SQL, no network or
+  database access, no SQL logged. The page shows it collapsed beside the result
+  (`test_frontend_evidence_rendering.py`, real Chrome). Whether the advice
+  helps on a real server has not been tested.
 - **Update notice:** `test_update_check.py`: version comparison, every
   failure path (HTTP 403/404/429, offline, timeout, TLS, malformed or
   unexpected JSON, a non-official release page), the exact request, caching,

@@ -43,6 +43,7 @@ from .risk_engine import (
     weakest_confidence,
 )
 from .analyzer import analyze_batch
+from .optimization import advise
 from .parser import has_executable_comment, parse_sql, unsupported_script
 from .version import APP_VERSION
 from .update_check import check_for_update
@@ -719,6 +720,13 @@ def build_statement_result(static_report, analysis, evidence: DatabaseEvidence,
         "reasons": restate_reasons(final_report.reasons, state),
         "checklist": final_report.checklist,
     }
+
+    # Advisory only, from the SQL alone, after the result above is final: it never
+    # changes the score, confidence, completeness or evidence (backend.optimization).
+    try:
+        payload["optimization"] = advise(final_report.facts)
+    except Exception:
+        payload["optimization"] = {"status": "unavailable", "recommendations": []}
 
     if analysis.assessment is not None:
         try:

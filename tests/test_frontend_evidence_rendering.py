@@ -202,6 +202,10 @@ def build_fixtures() -> dict:
         "server_setting": local_fixture("SET GLOBAL read_only = 0", username=None, password=None),
         "submitted_text": local_fixture("select id from users where name REGEXP '^a' LIMIT 20, 10",
                                         username=None, password=None),
+        # Optimization advice beside the result (advisory only), and a statement without any.
+        "optimization": local_fixture("SELECT id FROM users WHERE name LIKE '%son' ORDER BY RAND() LIMIT 5; "
+                                      "UPDATE users SET active = 0 WHERE id = 1",
+                                      username=None, password=None),
         # Analysed, valid-but-unsupported, invalid and unreadable statements in one batch.
         "not_analysed": local_fixture("SELECT * FROM users WHERE id = 1; VALUES ROW(1); SELEC x; XA START 'x'",
                                       username=None, password=None),
@@ -253,6 +257,15 @@ for (const [name, data] of Object.entries(FIXTURES)) {
       warning: (card.querySelector('.analysis-warning') || {}).textContent || null,
       confidence: card.querySelector('.metric.confidence b').textContent,
       why: [...card.querySelector('.layer.final ul.plain-list').children].map(li => li.textContent),
+      optimization: (() => { const box = card.querySelector('details.optimization');
+        const look = node => node ? (s => [s.fontWeight, s.color, s.fontSize])(getComputedStyle(node)) : null;
+        return box ? { summary: box.querySelector('summary').textContent, open: box.open,
+                       headings: [...box.querySelectorAll('.subheading')].map(h => h.textContent),
+                       caveatLabels: [...box.querySelectorAll('.caveats-label')].map(p => p.textContent),
+                       caveatLists: box.querySelectorAll('.caveats-label + ul.caveats').length,
+                       caveatLook: look(box.querySelector('ul.caveats li')),
+                       actionLook: look([...box.querySelectorAll('p')].find(p => p.textContent.startsWith('Suggested action'))),
+                       text: box.textContent } : null; })(),
       text: card.textContent,
     })),
   };
@@ -529,6 +542,27 @@ def test_the_statement_card_shows_the_sql_as_submitted(rendered):
     assert fixtures["submitted_text"]["statements"][0]["sql"] == sql
     text = out["submitted_text"]["statements"][0]["text"]
     assert sql in text and "REGEXP_LIKE" not in text and "OFFSET" not in text
+
+
+def test_optimization_advice_is_a_collapsed_advisory_section(rendered):
+    _, out = rendered
+    select, update = (view["optimization"] for view in out["optimization"]["statements"])
+    assert select["summary"] == ("Optimization advice: 2 observations "
+                                 "(advisory; does not change the risk score)")
+    assert select["open"] is False
+    assert select["headings"] == ["LIKE pattern starts with a wildcard (observed in the SQL)",
+                                  "ORDER BY RAND() (observed in the SQL)"]
+    assert "Suggested action:" in select["text"] and "How to verify:" in select["text"]
+    # Each observation labels its caveats, and they read like the suggested action (same
+    # normal weight, colour and size), not heavier or brighter.
+    assert select["caveatLabels"] == ["Caveats:", "Caveats:"] and select["caveatLists"] == 2
+    assert select["caveatLook"] == select["actionLook"] and select["caveatLook"][0] == "400"
+    assert update["summary"].startswith("Optimization advice: not checked")
+    assert "covers single SELECT statements only" in update["text"]
+    # Every rendered result has optimization in its own section, never in the risk summary.
+    for name, view in out.items():
+        if name != "__states":
+            assert "Optimization" not in "".join(view["assessment"]) + view["overview"], name
 
 
 def test_multi_row_plan_is_shown_without_a_first_row_summary(rendered):

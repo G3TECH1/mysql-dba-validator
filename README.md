@@ -42,6 +42,11 @@ database connected, so the result is static analysis only.*
   connection. Company servers are reached only through a local connector, for
   targets an operator has approved, over verified TLS. Each result says what
   evidence was collected, not collected, or failed.
+- **Suggests what to check for performance (advisory).** For a single `SELECT`
+  it notes a `LIKE` pattern that starts with a wildcard, a filtered column inside
+  a function or calculation, and `ORDER BY RAND()`, with caveats and how to
+  verify. This advice comes from fixed rules, never changes the risk result,
+  does not rewrite the SQL and is not a full performance review.
 - **Keeps credentials out of storage.** Logins are used for one operation and
   never saved.
 

@@ -1043,6 +1043,17 @@
 			background: var(--surface-2)
 		}
 
+		.layer.optimization p {
+			margin: 0 0 6px
+		}
+
+		/* Caveats read like the suggested action, not brighter than it. */
+		.layer.optimization .caveats {
+			margin-bottom: 6px;
+			color: var(--text-2);
+			font-weight: 400
+		}
+
 		.layer h3 {
 			margin-bottom: 8px;
 			color: var(--text-2);
@@ -3774,7 +3785,8 @@
 				]),
 				reasoningDetails(s),
 				evidenceLayer(s),
-				metadataLayer(s)
+				metadataLayer(s),
+				...(s.optimization ? [optimizationDetails(s.optimization)] : [])
 			);
 			body.append(layers);
 			card.append(body);
@@ -3793,6 +3805,39 @@
 					factorList(s.factors, 'No additional static factors.')
 				])
 			);
+			return box;
+		}
+
+		// Optimization advice: separate from the risk result, collapsed by default. Every item
+		// is an observation from the SQL; nothing here is measured or claims a speed-up.
+		function optimizationDetails(o) {
+			const items = o.recommendations || [];
+			const box = el('details', 'reasoning optimization');
+			const summary = o.status === 'advised'
+				? 'Optimization advice: ' + items.length + ' observation' + (items.length === 1 ? '' : 's')
+				: o.status === 'none_found' ? 'Optimization advice: no observations from the rules checked'
+				: 'Optimization advice: not checked';
+			box.append(el('summary', '', summary + ' (advisory; does not change the risk score)'));
+			const children = [];
+			if (o.status === 'not_eligible' || o.status === 'unavailable') {
+				children.push(el('p', 'muted', o.reason || 'Optimization advice could not be produced for this statement.'));
+			} else if (!items.length) {
+				children.push(el('p', 'muted', 'The rules checked are: a LIKE pattern that starts with a wildcard, a filtered column inside a function or calculation, and ORDER BY RAND(). This is not a full performance review.'));
+			}
+			items.forEach(item => {
+				const caveats = plainList(item.caveats, 'No caveats reported.');
+				caveats.classList.add('caveats');
+				children.push(
+					el('div', 'subheading', text(item.title) + ' (observed in the SQL)'),
+					el('p', '', item.observation),
+					el('p', '', 'Suggested action: ' + item.action),
+					el('p', 'muted', 'Why: ' + item.reasoning),
+					el('p', 'caveats-label', 'Caveats:'),
+					caveats,
+					el('p', 'muted', 'How to verify: ' + item.verify)
+				);
+			});
+			box.append(layer('OPTIMIZATION', 'optimization', children));
 			return box;
 		}
 
