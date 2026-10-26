@@ -10,7 +10,10 @@ python-dotenv>=1.0.0,<2.0.0
 # connector passes its own SSLContext (earlier releases fall back to plaintext if
 # the server does not offer TLS). The release builds pin 1.2.3.
 pymysql>=1.2.0,<2.0.0
-cryptography>=42.0.0,<46.0.0
+# 50.0.0 is the first release with fixes for every advisory against the earlier
+# pin (45.0.7), including the OpenSSL bundled in its wheels. The release builds
+# pin 50.0.2.
+cryptography>=50.0.0,<51.0.0
 pydantic>=2.0.0,<3.0.0
 
 # Test-only dependencies

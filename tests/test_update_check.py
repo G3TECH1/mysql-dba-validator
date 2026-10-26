@@ -29,7 +29,7 @@ from backend.main import app
 from backend.version import APP_VERSION
 from tests.test_frontend_evidence_rendering import dump_dom, find_chrome
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 REAL_OPEN = update_check._open  # the autouse fixture replaces it in every test
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 OWN_PAGE = {"Origin": "http://127.0.0.1:8420", "Host": "127.0.0.1:8420"}
@@ -321,16 +321,16 @@ def test_other_values_leave_the_check_on(github, monkeypatch, value):
 
 # ---------------------------------------------------------------- endpoint protection
 
-@pytest.mark.parametrize("headers", [
-    {},                                                             # not from a page
-    {"Host": "127.0.0.1:8420"},
-    {"Origin": "http://evil.example", "Host": "127.0.0.1:8420"},     # another website
-    {"Origin": "http://evil.example:8420", "Host": "evil.example:8420"},  # DNS rebinding
-    {"Origin": "null", "Host": "127.0.0.1:8420"},
-    {"Origin": "http://127.0.0.1:8420", "Host": "127.0.0.1:9999"},
+@pytest.mark.parametrize("headers, refused", [
+    ({}, 403),                                                             # not from a page
+    ({"Host": "127.0.0.1:8420"}, 403),
+    ({"Origin": "http://evil.example", "Host": "127.0.0.1:8420"}, 403),     # another website
+    ({"Origin": "http://evil.example:8420", "Host": "evil.example:8420"}, 400),  # DNS rebinding
+    ({"Origin": "null", "Host": "127.0.0.1:8420"}, 403),
+    ({"Origin": "http://127.0.0.1:8420", "Host": "127.0.0.1:9999"}, 403),
 ])
-def test_only_the_own_loopback_page_can_trigger_the_check(github, headers):
-    assert status(headers=headers).status_code == 403
+def test_only_the_own_loopback_page_can_trigger_the_check(github, headers, refused):
+    assert status(headers=headers).status_code == refused
     assert github.requests == []
 
 

@@ -38,7 +38,7 @@ REQUIRED_HELPERS = [
 
 @pytest.fixture(scope="module")
 def served_html() -> str:
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8420")
     response = client.get("/")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
@@ -69,7 +69,7 @@ def test_root_serves_the_intended_frontend(served_html):
 
 def test_favicon_is_a_local_self_contained_svg(served_html):
     assert '<link rel="icon" type="image/svg+xml" href="/static/assets/favicon.svg" />' in served_html
-    response = TestClient(app).get("/static/assets/favicon.svg")
+    response = TestClient(app, base_url="http://127.0.0.1:8420").get("/static/assets/favicon.svg")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/svg+xml")
     svg = response.text.replace('xmlns="http://www.w3.org/2000/svg"', "")  # namespace, not a resource
@@ -312,7 +312,7 @@ def test_discovery_state_is_cleared_on_target_login_and_session_changes(served_h
 ], ids=["statement_limit", "oversized_sql", "no_statements", "delimiter", "stored_program",
         "executable_comment"])
 def test_local_limit_errors_returned_by_api_have_friendly_page_messages(served_html, sql, code):
-    response = TestClient(app).post("/api/validate", json={"sql": sql})
+    response = TestClient(app, base_url="http://127.0.0.1:8420").post("/api/validate", json={"sql": sql})
     assert response.status_code == 200 and response.json().get("error") == code
     mapping = served_html[served_html.index("const RESPONSE_ERROR_MESSAGES = {"):]
     mapping = mapping[:mapping.index("};")]
@@ -428,7 +428,7 @@ def test_sql_editor_has_an_accessible_name(served_html):
 
 def test_default_local_page_request_is_accepted_by_api():
     """The page's default (untouched form) local request must validate statically."""
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8420")
     response = client.post(
         "/api/validate",
         json={

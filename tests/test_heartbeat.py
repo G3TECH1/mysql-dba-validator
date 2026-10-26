@@ -3,7 +3,9 @@
 Contract:
 - accepted (204) only from this server's own loopback page: the browser's Origin must
   be exactly http:// + Host, and Host must be 127.0.0.1 or localhost;
-- refused (403) for other websites, DNS-rebinding pages, and requests without Origin;
+- refused (403) for other websites and requests without Origin; a request whose Host
+  is not 127.0.0.1 or localhost (a DNS-rebinding page) is refused (400) by the
+  server-wide Host check before it reaches the endpoint;
 - carries no data, returns no body, creates no session and sets no CORS header;
 - only an accepted heartbeat reaches the idle monitor; without one (console version,
   development server) it does nothing.
@@ -18,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 
 
 @pytest.fixture
@@ -47,20 +49,20 @@ def test_own_page_heartbeat_is_accepted_and_reaches_the_monitor(beats, origin, h
     assert beats == [1]
 
 
-@pytest.mark.parametrize("origin, host", [
-    (None, "127.0.0.1:8420"),                                  # not from a page
-    ("null", "127.0.0.1:8420"),                                # sandboxed/opaque origin
-    ("http://evil.example", "127.0.0.1:8420"),                 # another website
-    ("https://127.0.0.1:8420", "127.0.0.1:8420"),              # different scheme
-    ("http://127.0.0.1:9999", "127.0.0.1:8420"),               # different port
-    ("http://localhost:8420", "127.0.0.1:8420"),               # origin and host disagree
-    ("http://evil.example:8420", "evil.example:8420"),         # DNS rebinding to 127.0.0.1
-    ("http://127.0.0.1.evil.example:8420", "127.0.0.1.evil.example:8420"),
-    ("http://10.0.0.5:8420", "10.0.0.5:8420"),                 # not loopback
+@pytest.mark.parametrize("origin, host, status", [
+    (None, "127.0.0.1:8420", 403),                             # not from a page
+    ("null", "127.0.0.1:8420", 403),                           # sandboxed/opaque origin
+    ("http://evil.example", "127.0.0.1:8420", 403),            # another website
+    ("https://127.0.0.1:8420", "127.0.0.1:8420", 403),         # different scheme
+    ("http://127.0.0.1:9999", "127.0.0.1:8420", 403),          # different port
+    ("http://localhost:8420", "127.0.0.1:8420", 403),          # origin and host disagree
+    ("http://evil.example:8420", "evil.example:8420", 400),    # DNS rebinding to 127.0.0.1
+    ("http://127.0.0.1.evil.example:8420", "127.0.0.1.evil.example:8420", 400),
+    ("http://10.0.0.5:8420", "10.0.0.5:8420", 400),            # not loopback
 ])
-def test_heartbeat_from_anything_but_the_own_page_is_refused(beats, origin, host):
+def test_heartbeat_from_anything_but_the_own_page_is_refused(beats, origin, host, status):
     response = beat(origin, host)
-    assert response.status_code == 403
+    assert response.status_code == status
     assert beats == []
     assert "access-control-allow-origin" not in response.headers
 

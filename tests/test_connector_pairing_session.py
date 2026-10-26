@@ -547,7 +547,7 @@ def test_pairing_secrets_and_credentials_never_logged(client, runtime, caplog):
 
 
 def test_public_api_still_refuses_company_credentials():
-    with TestClient(public_app) as public_client:
+    with TestClient(public_app, base_url="http://127.0.0.1:8420") as public_client:
         response = public_client.post("/api/validate", json={
             "sql": "SELECT 1",
             "host": "company-db.example.com",

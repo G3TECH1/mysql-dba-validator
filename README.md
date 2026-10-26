@@ -190,10 +190,15 @@ that machine, under an operator's approval; see
 
 Serving the web app to other machines (`--host 0.0.0.0`, a reverse proxy or a
 tunnel) is a trusted self-hosted setup only. In that setup there is no
-authentication, rate limiting or egress control, and the connection-test and
-discovery endpoints accept a user-supplied MySQL host. If you do it, set
-`CORS_ALLOW_ORIGINS` to the exact HTTPS origin, terminate TLS in the proxy,
-keep MySQL private and use a read-only MySQL account.
+authentication, rate limiting or egress control, and anyone who can reach the
+page can use the connection-test and discovery endpoints against the MySQL
+server on the machine running the web app (they accept only loopback targets:
+`127.0.0.1`, `::1` or `localhost`, port 3306). The web app answers only requests
+whose `Host` is `127.0.0.1` or `localhost`; others get HTTP 400. If you do it,
+add the exact host names clients use to `MDV_ALLOWED_HOSTS` (comma-separated;
+wildcards are ignored), set `CORS_ALLOW_ORIGINS` to the exact HTTPS origin,
+terminate TLS in the proxy, keep MySQL private and use a read-only MySQL
+account.
 
 ## Documentation
 

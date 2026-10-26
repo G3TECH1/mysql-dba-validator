@@ -314,7 +314,8 @@ def main() -> int:
         foreign = request("POST", PAGE + "/api/heartbeat", headers={"Origin": "http://evil.example"})[0]
         rebound = request("POST", PAGE + "/api/heartbeat", headers={
             "Origin": "http://evil.example:8420", "Host": "evil.example:8420"})[0]
-        check("heartbeat accepted only from this machine's page", (own, foreign, rebound) == (204, 403, 403),
+        # A rebound Host is refused (400) by the web app's Host check before the endpoint.
+        check("heartbeat accepted only from this machine's page", (own, foreign, rebound) == (204, 403, 400),
               (own, foreign, rebound))
         end = time.time() + idle_seconds * 1.5
         while time.time() < end:

@@ -279,6 +279,37 @@ def test_macos_spec_builds_an_arm64_bundle_with_no_identity_and_no_entitlements(
     assert (ROOT / "release" / "mysql-dba-validator.icns").read_bytes()[:4] == b"icns"
 
 
+def test_macos_spec_leaves_out_only_dist_info_sboms():
+    """cryptography 50+ ships dist-info/sboms/ with the wheel builder's /Users/runner paths;
+    the bundle keeps every other metadata and licence file."""
+    spec = (ROOT / "release" / "mysql-dba-validator-macos.spec").read_text(encoding="utf-8")
+    lines = [line for line in spec.splitlines() if line.startswith("a.datas = ")]
+    assert len(lines) == 1
+    assert spec.index(lines[0]) > spec.index("a = Analysis(") and spec.index(lines[0]) < spec.index("coll = COLLECT(")
+
+    class Analysis:
+        datas = [
+            ("cryptography-50.0.2.dist-info/sboms/cryptography-rust.cyclonedx.json", "src", "DATA"),
+            ("cryptography-50.0.2.dist-info/sboms/sbom.json", "src", "DATA"),
+            ("cryptography-50.0.2.dist-info\\sboms\\sbom.json", "src", "DATA"),
+            ("cryptography-50.0.2.dist-info/METADATA", "src", "DATA"),
+            ("cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE", "src", "DATA"),
+            ("cryptography-50.0.2.dist-info/RECORD", "src", "DATA"),
+            ("frontend/index.html", "src", "DATA"),
+            ("sboms/not-metadata.json", "src", "DATA"),
+        ]
+
+    scope = {"a": Analysis()}
+    exec(lines[0], scope)
+    assert [entry[0] for entry in scope["a"].datas] == [
+        "cryptography-50.0.2.dist-info/METADATA",
+        "cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+        "cryptography-50.0.2.dist-info/RECORD",
+        "frontend/index.html",
+        "sboms/not-metadata.json",
+    ]
+
+
 def _pins(name):
     lines = (ROOT / "release" / name).read_text(encoding="utf-8").splitlines()
     pins = {}

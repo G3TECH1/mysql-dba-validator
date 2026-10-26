@@ -51,11 +51,13 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi import FastAPI, Request
 
 import ipaddress
 import os
+import re
 import socket
 from enum import Enum
 from pathlib import Path
@@ -99,6 +101,35 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
     allow_credentials=False,
+)
+
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+_HOST_NAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*")
+
+
+def configured_allowed_hosts() -> list[str]:
+    """Return the Host header names this server answers.
+
+    Always the loopback names, plus the exact host names in MDV_ALLOWED_HOSTS
+    (comma-separated) for a trusted self-hosted setup. An entry that is not a plain
+    host name or IPv4 address, such as "*" or "*.example.com", is ignored, so the
+    check cannot be turned off. A request for any other host, such as another
+    website's DNS name rebound to 127.0.0.1, gets 400.
+    """
+    configured = os.environ.get("MDV_ALLOWED_HOSTS", "")
+    extra = [host.strip().lower()
+             for host in configured.split(",") if host.strip()]
+    return list(LOOPBACK_HOSTS) + [
+        host for host in extra
+        if _HOST_NAME.fullmatch(host) and host not in LOOPBACK_HOSTS
+    ]
+
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=configured_allowed_hosts(),
+    www_redirect=False,
 )
 
 

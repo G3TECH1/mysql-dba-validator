@@ -475,7 +475,7 @@ def test_single_version_source_used_by_api_and_build():
     from backend.main import app
 
     assert build_windows.read_version() == APP_VERSION
-    assert TestClient(app).get("/api/health").json()["version"] == APP_VERSION
+    assert TestClient(app, base_url="http://127.0.0.1:8420").get("/api/health").json()["version"] == APP_VERSION
     assert app.version == APP_VERSION
 
 

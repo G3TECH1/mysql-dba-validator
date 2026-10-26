@@ -16,7 +16,7 @@ from backend.metadata import MetadataEvidence
 from tests.local_evidence import FAKE_LOGIN, FakeEvidenceConnection
 
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 
 
 class TestModeSpoofing:

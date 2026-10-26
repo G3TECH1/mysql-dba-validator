@@ -35,7 +35,7 @@ from tests.test_local_evidence_credentials import (  # noqa: F401  (mysql is a f
     post,
 )
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 NOT_ANALYSED_CHECK = "Do not execute a statement that the validator could not analyze."
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 
