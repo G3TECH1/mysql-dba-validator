@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit is advisory only. Owner approval and required CI checks are
+# enforced by repository rulesets. This file does not reduce GitHub App
+# permissions or disable the separate Autofix (Autopilot) agent.
+reviews:
+  high_level_summary: false
+  auto_approvals:
+    enabled: false
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
