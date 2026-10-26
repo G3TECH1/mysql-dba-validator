@@ -17,6 +17,7 @@ reviews:
   auto_review:
     enabled: true
     auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
     drafts: false
   auto_approvals:
     enabled: false
@@ -72,7 +73,7 @@ reviews:
           backend/, connector/, release/ or .github/, or changes requirements.txt,
           .coderabbit.yaml, SECURITY.md or
           docs/v2-database-evidence-contract.md; (2) a GitHub check on the latest
-          commit failed or has not finished; (3) the review found an actionable
+          commit was reported as failed when this review ran; (3) the review found an actionable
           correctness, security, regression or safety-contract problem. Otherwise
           pass. When failing, name which condition applied. When passing, say only
           that none of these conditions was found; never say the pull request is
