@@ -386,8 +386,9 @@ def main() -> int:
         rebound = request("POST", PAGE + "/api/heartbeat", headers={
             "Origin": "http://evil.example:8420", "Host": "evil.example:8420"})[0]
         no_origin = request("POST", PAGE + "/api/heartbeat")[0]
+        # A rebound Host is refused (400) by the web app's Host check before the endpoint.
         check("heartbeat accepted only from this machine's page",
-              (own, own_localhost, foreign, rebound, no_origin) == (204, 204, 403, 403, 403),
+              (own, own_localhost, foreign, rebound, no_origin) == (204, 204, 403, 400, 403),
               (own, own_localhost, foreign, rebound, no_origin))
         # Heartbeats keep it alive well past the idle timeout...
         end = time.time() + idle_seconds * 1.5

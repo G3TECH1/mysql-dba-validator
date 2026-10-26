@@ -582,7 +582,7 @@ def test_other_connector_routes_keep_the_small_body_limit(fake_mysql):
 
 
 def test_local_flow_is_unchanged():
-    with TestClient(public_app) as client:
+    with TestClient(public_app, base_url="http://127.0.0.1:8420") as client:
         local = client.post("/api/validate", json={
             "sql": "SELECT * FROM users;", "host": "127.0.0.1", "port": 3306, "username": "", "password": ""})
         assert local.status_code == 200 and local.json()["statement_count"] == 1

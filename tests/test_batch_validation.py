@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import MAX_STATEMENTS, app
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 
 
 def validate(sql: str) -> dict:

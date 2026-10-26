@@ -23,7 +23,7 @@ from backend.main import app
 from tests.test_frontend_evidence_rendering import local_fixture
 from tests.test_local_evidence_credentials import FakeMySQL, explain_row
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 ADVISER = Path(__file__).resolve().parent.parent / "backend" / "optimization.py"
 FIELDS = {"code", "basis", "title", "observation", "action", "reasoning", "caveats", "verify"}
 

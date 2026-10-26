@@ -14,7 +14,7 @@ from backend.main import app
 
 USER = "fake_redaction_user"
 PASSWORD = "Fake-Redaction-Password-4417"
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 
 CASES = [
     # /api/validate

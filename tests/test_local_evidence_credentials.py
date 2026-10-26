@@ -41,7 +41,7 @@ DECOY = {
     "MYSQL_PASSWORD": "Decoy-Env-Password-5150",
     "MYSQL_DATABASE": "decoy_env_db",
 }
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 
 
 def mysql_error(errno, message):

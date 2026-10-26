@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.parser import parse_sql, unsupported_script
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1:8420")
 
 NOT_ANALYSED_CHECK = "Do not execute a statement that the validator could not analyze."
 
