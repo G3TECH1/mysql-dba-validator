@@ -43,6 +43,11 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# Hooks collect whole *.dist-info folders (copy_metadata). Since cryptography 50 these
+# include sboms/ files that record the wheel builder's paths (/Users/runner/work/...),
+# which release/audit_macos.py rightly rejects outside Mach-O content. The app needs
+# only the metadata and licence files, so the SBOMs alone are left out.
+a.datas = [entry for entry in a.datas if ".dist-info/sboms/" not in entry[0].replace("\\", "/")]
 pyz = PYZ(a.pure)
 
 # The app users open: no window; web app only (see release/launcher.py).
