@@ -131,17 +131,32 @@ logs of the `main` run:
 These are CI results on Python 3.14, not the maintainer's Windows 10 machine
 (Python 3.13.5) used for the local results in this document.
 
-`main` is protected by a classic branch protection rule (no rulesets apply),
-read back through the GitHub API on 2026-10-24:
+`main` is protected by a classic branch protection rule and, since 2026-10-26,
+by two repository rulesets; all of them apply to `main`. The classic rule, read
+back through the GitHub API on 2026-10-24 and again, unchanged, on 2026-10-26:
 
 | Setting | Value | What it means ([GitHub docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)) |
 | --- | --- | --- |
 | Require a pull request before merging | On, 0 approvals required | Changes go through a pull request, but no approving review is needed to merge |
 | Required status checks | `Tests (windows-latest)` and `Tests (macos-15)`, both from GitHub Actions (app ID 15368) | Both checks must pass on the pull request's latest commit before it can merge. They are the names the workflow's jobs report (`Tests (${{ matrix.os }})`); renaming the job or changing the matrix leaves the required names waiting for a status that never arrives |
 | Require branches to be up to date | Off | A pull request can merge without being retested against the latest `main`; the push run on `main` then tests the merged result, after the merge |
-| Do not allow bypassing the above settings | Off | The rule does not apply to administrators: the repository owner can still push to `main` or merge without the checks |
+| Do not allow bypassing the above settings | Off | The rule does not apply to administrators: on its own, the repository owner could still push to `main` or merge without the checks; the rulesets below now prevent both |
 | Allow force pushes, allow deletions | Both off | GitHub's default for a protected branch: force pushes to `main` and deleting it are blocked |
 | Linear history, signed commits, conversation resolution, code-owner review, push restrictions, branch lock, merge queue | Not configured | |
+
+The rulesets, read back through the GitHub API on 2026-10-26. Both are active
+and target the default branch (`main`):
+
+| Ruleset | Rules | Bypass |
+| --- | --- | --- |
+| `main: owner review required` | Pull request required, with 1 approval and code-owner review (`.github/CODEOWNERS` assigns every file to `@realspinn`). New commits dismiss earlier approvals, and the most recent push must be approved by someone other than the person who pushed it. Review threads need not be resolved | Repository admins, for pull requests only: an admin can merge a pull request without the approval, as an explicit bypass |
+| `main: required CI and history (no bypass)` | `Tests (windows-latest)` and `Tests (macos-15)` from GitHub Actions (app ID 15368) must pass; branches need not be up to date; force pushes and deleting `main` are blocked | None, administrators included |
+
+With the rulesets, the classic rule's bypass setting no longer lets an
+administrator merge without the two checks or push to `main` without a pull
+request. GitHub does not let a pull request's author approve it, and the
+repository owner is the only account with write access, so the owner's own pull
+requests can merge only through the admin bypass.
 
 This is the configuration as GitHub reports it, not an enforcement test: no
 pull request with a failing or missing check has been tried against it, and
