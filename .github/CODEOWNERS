@@ -1,0 +1,4 @@
+# The maintainer owns every file, so GitHub requests their review on every
+# pull request. The "main: owner review required" ruleset makes that approval
+# mandatory before merging; this file alone does not enforce it.
+* @realspinn
