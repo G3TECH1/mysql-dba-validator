@@ -327,6 +327,15 @@ def test_connector_statement_limit_has_friendly_message(served_html):
     assert "statement_limit_exceeded: '" in connector_map[:connector_map.index("};")]
 
 
+def test_database_validation_failed_has_friendly_message(served_html):
+    connector_map = served_html[served_html.index("const CONNECTOR_ERROR_MESSAGES = {"):]
+    block = connector_map[:connector_map.index("};")]
+    line = next(line.strip() for line in block.splitlines()
+                 if line.strip().startswith("database_validation_failed: "))
+    # A fixed string literal: nothing from the response is interpolated.
+    assert re.fullmatch(r"\w+: '(?:[^'\\]|\\')+',?", line), line
+
+
 def test_batch_contract_errors_have_the_same_message_locally_and_remotely(served_html):
     def message(map_name, code):
         mapping = served_html[served_html.index(f"const {map_name} = {{"):]
