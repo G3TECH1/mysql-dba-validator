@@ -588,6 +588,62 @@ def test_refuses_duplicate_runs_of_a_required_check():
     _error(api, re.escape(f"{MACOS}: 2 runs"))
 
 
+def _suite_run(check, conclusion, completed_at, sha=SHA, status="completed"):
+    """A check run as filter=latest returns it when CI ran more than once on the commit: one per suite."""
+    run = _run(check, sha=sha, status=status, conclusion=conclusion)
+    run["completed_at"] = completed_at
+    return run
+
+
+def test_newer_successful_run_replaces_an_older_failure():
+    """CI re-run on the same commit (for example after reopening the PR): the newest result decides."""
+    api = FakeGitHub()
+    api.runs[SHA] = [_suite_run(WINDOWS, "success", "2026-10-27T05:50:00Z"),
+                     _suite_run(MACOS, "failure", "2026-10-27T05:52:00Z"),
+                     _suite_run(WINDOWS, "success", "2026-10-27T06:14:00Z"),
+                     _suite_run(MACOS, "success", "2026-10-27T06:16:00Z")]
+    assert _only_outcome(api) == ("posted a summary", False)
+    assert f"{MACOS} ✅ success · {WINDOWS} ✅ success" in api.writes[0][2]
+
+
+def test_older_success_does_not_hide_a_newer_failure():
+    api = FakeGitHub()
+    api.runs[SHA] = [_run(WINDOWS),
+                     _suite_run(MACOS, "success", "2026-10-27T05:52:00Z"),
+                     _suite_run(MACOS, "failure", "2026-10-27T06:16:00+00:00")]
+    _skipped(api, re.escape(f"{MACOS}: failure"))
+
+
+def test_older_success_does_not_count_while_a_newer_run_is_in_progress():
+    api = FakeGitHub()
+    api.runs[SHA] = [_run(WINDOWS),
+                     _suite_run(MACOS, "success", "2026-10-27T05:52:00Z"),
+                     _suite_run(MACOS, None, None, status="in_progress")]
+    _skipped(api, re.escape(f"{MACOS}: in_progress (one of 2 runs on this commit)"))
+
+
+@pytest.mark.parametrize("times", [
+    ("2026-10-27T06:16:00Z", "2026-10-27T06:16:00+00:00"),   # the same moment
+    ("2026-10-27T06:16:00Z", None),                          # missing
+    ("2026-10-27T06:16:00Z", ""),
+    ("2026-10-27T06:16:00Z", "yesterday"),                    # malformed
+    ("2026-10-27T06:16:00Z", "2026-10-27T06:17:00"),          # no time zone
+    ("2026-10-27T06:16:00Z", 1793091360),                     # not text
+])
+def test_runs_that_cannot_be_ordered_fail_closed(times):
+    api = FakeGitHub()
+    api.runs[SHA] = [_run(WINDOWS)] + [_suite_run(MACOS, "success", t) for t in times]
+    _error(api, re.escape(f"{MACOS}: 2 runs on this commit without one clearly latest completion time"))
+
+
+def test_a_duplicate_run_for_another_commit_is_never_used():
+    api = FakeGitHub()
+    api.runs[SHA] = [_run(WINDOWS),
+                     _suite_run(MACOS, "failure", "2026-10-27T05:52:00Z"),
+                     _suite_run(MACOS, "success", "2026-10-27T06:16:00Z", sha=OTHER_SHA)]
+    _error(api, re.escape(f"{MACOS}: ran on a different commit"))
+
+
 def test_refuses_a_check_reported_by_the_wrong_app():
     api = FakeGitHub()
     api.runs[SHA] = [_run(WINDOWS), _run(MACOS, app_id=999)]

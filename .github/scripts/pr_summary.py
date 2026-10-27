@@ -13,8 +13,10 @@ each pull request it checks, from the GitHub API:
 
 A pull request whose checks have not all passed (failed, pending, cancelled,
 skipped, missing...) gets no summary. Anything that cannot be verified (an
-unreadable or inconsistent protection setup, duplicate or unexpected check runs,
-API errors) is reported as an error and the run fails so the maintainer sees it.
+unreadable or inconsistent protection setup, unexpected check runs, API errors)
+is reported as an error and the run fails so the maintainer sees it. If CI ran
+more than once on the commit, the most recently completed run of each check
+decides.
 
 The summary is a fixed template filled only from GitHub data: the commit it
 covers, the required-check results, the pull request title and the changed
@@ -57,6 +59,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 
 BOT_LOGIN = "github-actions[bot]"
 MARKER_PREFIX = "<!-- mdv-pr-summary"
@@ -202,12 +205,24 @@ def required_checks(api, repo: str, branch: str) -> dict:
     return from_ruleset
 
 
+def _timestamp(value):
+    """A GitHub ISO 8601 timestamp with a time zone, or None if it is missing or malformed."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
 def check_results(api, repo: str, sha: str, required: dict) -> list:
     """[(check name, conclusion)] for every required check; raise unless all succeeded.
 
     Checks that are missing, unfinished or did not succeed are an ordinary state
-    for a pull request (NotReady). Duplicate runs, runs from another app or for
-    another commit are unexpected and cannot be verified (VerificationError).
+    for a pull request (NotReady). Runs from another app or for another commit,
+    and several runs that cannot be put in order by completion time, are
+    unexpected and cannot be verified (VerificationError).
     """
     response = api.get(f"/repos/{repo}/commits/{sha}/check-runs", {"filter": "latest", "per_page": PAGE_SIZE})
     runs = response.get("check_runs") if isinstance(response, dict) else None
@@ -227,13 +242,26 @@ def check_results(api, repo: str, sha: str, required: dict) -> list:
             else:
                 not_passed.append(f"{name}: missing")
             continue
-        if len(matching) > 1:
-            anomalies.append(f"{name}: {len(matching)} runs on this commit, expected one")
+        if any(run.get("head_sha") != sha for run in matching):
+            anomalies.append(f"{name}: ran on a different commit")
             continue
         run = matching[0]
-        if run.get("head_sha") != sha:
-            anomalies.append(f"{name}: ran on a different commit")
-        elif run.get("status") != "completed":
+        if len(matching) > 1:
+            # Every CI run on the commit (for example after the PR is reopened) is its own check
+            # suite, and filter=latest returns the latest run from each suite. The most recently
+            # completed one decides; a run still in progress means the result is not known yet.
+            unfinished = [r for r in matching if r.get("status") != "completed"]
+            if unfinished:
+                not_passed.append(f"{name}: {unfinished[0].get('status') or 'unknown status'} "
+                                  f"(one of {len(matching)} runs on this commit)")
+                continue
+            times = [_timestamp(r.get("completed_at")) for r in matching]
+            if None in times or times.count(max(times)) > 1:
+                anomalies.append(f"{name}: {len(matching)} runs on this commit without one clearly latest "
+                                 "completion time")
+                continue
+            run = matching[times.index(max(times))]
+        if run.get("status") != "completed":
             not_passed.append(f"{name}: {run.get('status') or 'unknown status'}")
         elif run.get("conclusion") != "success":
             not_passed.append(f"{name}: {run.get('conclusion') or 'no conclusion'}")
