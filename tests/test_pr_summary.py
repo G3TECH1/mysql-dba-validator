@@ -82,6 +82,8 @@ class FakeGitHub:
             pull = copy.deepcopy(self.pulls[int(m.group(1))])
             if pull["number"] in self.later_heads:
                 pull["head"]["sha"] = self.later_heads[pull["number"]]
+            # "Get a pull request" includes the changed-file count; tests can override it.
+            pull.setdefault("changed_files", len(self.files))
             return pull
         if re.fullmatch(rf"/repos/{REPO}/pulls/\d+/files", path):
             return self._page(self.files, params)
@@ -306,12 +308,191 @@ def test_many_files_are_counted_and_the_list_is_cut():
     assert "- and 5 more" in body
 
 
-def test_file_list_beyond_the_page_limit_is_marked_incomplete():
+def test_large_file_lists_are_read_in_full():
     api = FakeGitHub()
     api.files = [{"filename": f"f{i}.py", "status": "added", "additions": 1, "deletions": 0} for i in range(350)]
     _outcomes(api)
     body = api.writes[0][2]
-    assert "Changes: 300+ files" in body and "- and 285+ more" in body
+    assert "Changes: 350 files, +350/-0" in body and "- and 335 more" in body
+
+
+# ----------------------------------------------------------------------------- .github/ changes
+
+def _file(name, status="modified", previous=None):
+    item = {"filename": name, "status": status, "additions": 1, "deletions": 0}
+    if previous:
+        item["previous_filename"] = previous
+    return item
+
+
+def _flagged(api):
+    outcome, is_error = _only_outcome(api)
+    assert not is_error and outcome.startswith("no passing summary: the PR changes"), outcome
+    return outcome
+
+
+@pytest.mark.parametrize("files", [
+    [_file(".github/workflows/ci.yml")],                                   # workflow
+    [_file(".github/scripts/pr_summary.py")],                              # script
+    [_file(".github/CODEOWNERS")],                                         # other configuration
+    [_file("backend/risk.py"), _file(".github/workflows/new.yml", "added")],  # mixed with app code
+    [_file(".github/workflows/old.yml", "removed")],                       # deletion
+    [_file("docs/ci.yml", "renamed", previous=".github/workflows/ci.yml")],  # renamed out of .github/
+    [_file(".GitHub/workflows/ci.yml")],                                   # other letter case
+])
+def test_no_passing_summary_for_a_pr_that_changes_github_config(files):
+    api = FakeGitHub()
+    api.files = files
+    _flagged(api)
+    [(method, _, body)] = api.writes
+    assert method == "POST"
+    assert body.startswith(_marker("blocked", SHA) + "\n")
+    assert f"not given for commit `{SHA}`" in body and "needs maintainer review" in body
+    # Nothing that reads as a successful verification.
+    assert "✅" not in body and "passed" not in body and "Changes:" not in body
+    assert "not a review or approval by the maintainer" in body
+
+
+@pytest.mark.parametrize("name", ["docs/.github-example.md", "src/.github/workflows/x.yml", ".githubx/a.yml", "github/a.yml"])
+def test_paths_that_only_look_like_github_config_keep_the_normal_summary(name):
+    api = FakeGitHub()
+    api.files = [_file(name)]
+    assert _only_outcome(api) == ("posted a summary", False)
+    assert api.writes[0][2].startswith(_marker("verified", SHA))
+
+
+def test_github_config_change_beyond_the_first_page_is_found():
+    api = FakeGitHub()
+    api.files = [_file(f"backend/f{i}.py") for i in range(250)] + [_file(".github/workflows/ci.yml")]
+    _flagged(api)
+    assert api.writes[0][2].startswith(_marker("blocked", SHA))
+
+
+def test_no_passing_summary_when_github_cannot_list_every_changed_file():
+    api = FakeGitHub()
+    api.comments[7] = [{"id": 5, "user": dict(BOT), "body": _marker("verified", OTHER_SHA)}]
+    api.files = [_file(f"f{i}.py") for i in range(pr_summary.MAX_PR_FILES)]
+    outcome, is_error = _only_outcome(api)
+    assert is_error and "more than GitHub can list" in outcome and outcome.endswith("marked outdated")
+    [comment] = api.comments[7]
+    assert comment["body"].startswith(_marker("superseded", SHA)) and "✅" not in comment["body"]
+
+
+def test_a_complete_list_just_under_the_cap_is_accepted():
+    """2,999 files is still a complete list: summarised normally, and a .github/ file at the end is found."""
+    names = [f"f{i}.py" for i in range(pr_summary.MAX_PR_FILES - 1)]
+    api = FakeGitHub()
+    api.files = [_file(n) for n in names]
+    assert _only_outcome(api) == ("posted a summary", False)
+    assert "Changes: 2999 files, +2999/-0" in api.writes[0][2]
+
+    api = FakeGitHub()
+    api.files = [_file(n) for n in names[:-1]] + [_file(".github/workflows/ci.yml")]
+    _flagged(api)
+    assert api.writes[0][2].startswith(_marker("blocked", SHA))
+
+
+@pytest.mark.parametrize("reported", [2, 0, None, "1", True, 1.0])
+def test_no_passing_summary_when_the_file_count_does_not_match(reported):
+    api = FakeGitHub()
+    api.comments[7] = [{"id": 5, "user": dict(BOT), "body": _marker("verified", OTHER_SHA)}]
+    if reported is None:  # the field is missing from the response
+        api.get = (lambda original: lambda path, params=None: (
+            {k: v for k, v in original(path, params).items() if k != "changed_files"}
+            if path == f"/repos/{REPO}/pulls/7" else original(path, params)))(api.get)
+    else:
+        api.pulls[7]["changed_files"] = reported
+    outcome, is_error = _only_outcome(api)
+    assert is_error and "cannot all be checked" in outcome and outcome.endswith("marked outdated"), outcome
+    [comment] = api.comments[7]
+    assert comment["body"].startswith(_marker("superseded", SHA)) and "✅" not in comment["body"]
+
+
+def test_a_short_page_from_github_cannot_hide_a_github_config_change():
+    """If a page came back short, the list would stop early; the count check catches it."""
+    api = FakeGitHub()
+    api.files = [_file(f"f{i}.py") for i in range(150)] + [_file(".github/workflows/ci.yml")]
+    original = api._page
+    api._page = lambda items, params: (original(items, params)[:99]
+                                       if items is api.files and params["page"] == 1 else original(items, params))
+    _error(api, "lists 99 changed files but GitHub reports 151")
+
+
+def test_github_config_notice_does_not_depend_on_the_file_count():
+    """A .github/ file that was seen is enough for the review notice, even if the list looks short."""
+    api = FakeGitHub()
+    api.files = [_file(".github/workflows/ci.yml")]
+    api.pulls[7]["changed_files"] = 5
+    _flagged(api)
+    assert api.writes[0][2].startswith(_marker("blocked", SHA))
+
+
+def test_no_passing_summary_for_a_malformed_changed_file_entry():
+    api = FakeGitHub()
+    api.files = [{"status": "modified"}]
+    _error(api, "malformed changed-file entry")
+
+
+def test_earlier_summary_is_replaced_when_the_new_head_changes_github_config():
+    api = FakeGitHub()
+    _outcomes(api)
+    api.pulls[7]["head"]["sha"] = OTHER_SHA
+    api.files = [_file(".github/workflows/ci.yml")]
+    assert "updated the comment to a maintainer-review notice" in _flagged(api)
+    [comment] = api.comments[7]
+    assert comment["body"].startswith(_marker("blocked", OTHER_SHA))
+    assert "✅" not in comment["body"] and SHA not in comment["body"]
+
+
+def test_github_config_notice_is_written_once_per_commit():
+    api = FakeGitHub()
+    api.files = [_file(".github/workflows/ci.yml")]
+    _outcomes(api)
+    assert _only_outcome(api) == ("already flagged for maintainer review for this commit", False)
+    assert len(api.writes) == 1 and len(api.comments[7]) == 1
+
+
+def test_github_config_notice_never_edits_a_human_comment():
+    api = FakeGitHub()
+    forged = _marker("verified", SHA) + "\nlooks fine"
+    api.comments[7] = [{"id": 1, "user": {"login": "someone", "type": "User"}, "body": forged}]
+    api.files = [_file(".github/workflows/ci.yml")]
+    _flagged(api)
+    assert api.comments[7][0]["body"] == forged
+    assert [w[0] for w in api.writes] == ["POST"]
+
+
+def test_github_config_notice_is_not_written_if_the_head_moves():
+    api = FakeGitHub()
+    api.comments[7] = [{"id": 5, "user": dict(BOT), "body": _marker("verified", OTHER_SHA)}]
+    api.files = [_file(".github/workflows/ci.yml")]
+    api.later_heads[7] = "c" * 40
+    _skipped(api, "head moved")
+
+
+def test_github_config_notice_waits_for_the_required_checks():
+    """While checks are still running, the ordinary no-summary handling applies."""
+    api = FakeGitHub()
+    api.files = [_file(".github/workflows/ci.yml")]
+    api.runs[SHA] = [_run(WINDOWS), _run(MACOS, status="in_progress", conclusion=None)]
+    _skipped(api, "in_progress")
+
+
+def test_github_config_notice_is_superseded_by_a_later_commit_that_passes():
+    api = FakeGitHub()
+    api.comments[7] = [{"id": 5, "user": dict(BOT), "body": _marker("blocked", OTHER_SHA)}]
+    assert _only_outcome(api) == ("updated the summary", False)
+    assert api.comments[7][0]["body"].startswith(_marker("verified", SHA))
+
+
+def test_log_line_for_github_config_changes_does_not_print_file_names(monkeypatch, capsys):
+    api = FakeGitHub()
+    api.files = [_file(".github/workflows/\n::error::injected.yml")]
+    monkeypatch.setattr(pr_summary, "GitHubAPI", lambda token, url: api)
+    assert pr_summary.main({"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": REPO}) == 0
+    out = capsys.readouterr().out
+    assert "#7: no passing summary: the PR changes 1 file(s) under .github/; posted a maintainer-review notice" in out
+    assert "injected" not in out
 
 
 # ----------------------------------------------------------------------------- which pull requests

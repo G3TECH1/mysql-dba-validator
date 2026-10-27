@@ -33,6 +33,13 @@ marker. The marker records which commit the comment covers:
   * state=superseded: the head moved to a commit that has not (yet) passed, so
     the earlier summary was replaced by a short "no summary for the latest
     commit" note. No check results are shown for a commit that did not pass.
+  * state=blocked: the checks passed, but the pull request changes files under
+    .github/. A pull request's CI runs the workflow files from its own merge
+    commit, so it can change what produces its green checks; the comment says
+    the commit needs maintainer review and shows no check results. The complete
+    changed-file list is read (renames included); if GitHub cannot return all
+    of it, or it does not hold as many entries as the pull request's
+    changed_files count, nothing passing is posted.
 
 The head commit is read again just before every write. That narrows, but cannot
 close, the gap between the check and the write; the comment names the commit it
@@ -53,9 +60,9 @@ import urllib.request
 
 BOT_LOGIN = "github-actions[bot]"
 MARKER_PREFIX = "<!-- mdv-pr-summary"
-MARKER_RE = re.compile(r"<!-- mdv-pr-summary state=(verified|superseded) sha=([0-9a-f]{40}) -->")
+MARKER_RE = re.compile(r"<!-- mdv-pr-summary state=(verified|superseded|blocked) sha=([0-9a-f]{40}) -->")
 PAGE_SIZE = 100
-MAX_FILE_PAGES = 3  # up to 300 changed files are counted
+MAX_PR_FILES = 3000  # GitHub lists at most 3000 changed files for a pull request
 MAX_FILES_LISTED = 15
 MAX_TITLE_CHARS = 200
 
@@ -239,6 +246,28 @@ def check_results(api, repo: str, sha: str, required: dict) -> list:
     return results
 
 
+def changed_files(api, repo: str, pr: int) -> list:
+    """Every file the pull request changes; raise if GitHub cannot return the complete list."""
+    files, cut_off = get_pages(api, f"/repos/{repo}/pulls/{pr}/files", max_pages=MAX_PR_FILES // PAGE_SIZE)
+    if cut_off:
+        raise VerificationError(f"pull request #{pr} changes {MAX_PR_FILES} or more files, "
+                                "more than GitHub can list, so its changed files cannot all be checked")
+    for item in files:
+        if not isinstance(item, dict) or not isinstance(item.get("filename"), str):
+            raise VerificationError(f"pull request #{pr} has a malformed changed-file entry")
+    return files
+
+
+def is_github_config(path) -> bool:
+    """A path in the repository's root .github/ directory. Any letter case, to be conservative."""
+    return isinstance(path, str) and (path.lower() == ".github" or path.lower().startswith(".github/"))
+
+
+def github_config_changes(files: list) -> int:
+    """How many changed files are, or were renamed from, a path under .github/."""
+    return sum(1 for f in files if is_github_config(f["filename"]) or is_github_config(f.get("previous_filename")))
+
+
 # ----------------------------------------------------------------------------- comment text
 
 FOOTER = ("<sub>Automated status summary, posted by github-actions[bot] from GitHub data only "
@@ -255,11 +284,11 @@ def _code(text: str, limit: int | None = None) -> str:
     return f"`{text}`" if text else "(none)"
 
 
-def summary_body(pull: dict, sha: str, branch: str, results: list, files: list, files_truncated: bool) -> str:
+def summary_body(pull: dict, sha: str, branch: str, results: list, files: list) -> str:
     checks = " · ".join(f"{name} ✅ {conclusion}" for name, conclusion in results)
     additions = sum(int(f.get("additions") or 0) for f in files)
     deletions = sum(int(f.get("deletions") or 0) for f in files)
-    count = f"{len(files)}{'+' if files_truncated else ''} file{'' if len(files) == 1 else 's'}"
+    count = f"{len(files)} file{'' if len(files) == 1 else 's'}"
     lines = [
         f"{MARKER_PREFIX} state=verified sha={sha} -->",
         f"**Automated status summary** for commit `{sha}`, the head of this PR when it was checked.",
@@ -273,8 +302,8 @@ def summary_body(pull: dict, sha: str, branch: str, results: list, files: list, 
         lines.append(f"- {_code(str(f.get('filename') or ''))} ({_code(str(f.get('status') or ''))}, "
                      f"+{int(f.get('additions') or 0)}/-{int(f.get('deletions') or 0)})")
     hidden = len(files) - min(len(files), MAX_FILES_LISTED)
-    if hidden or files_truncated:
-        lines.append(f"- and {hidden}{'+' if files_truncated else ''} more")
+    if hidden:
+        lines.append(f"- and {hidden} more")
     lines += ["", "This is replaced when a newer commit is pushed.", "", "---", FOOTER]
     return "\n".join(lines)
 
@@ -285,6 +314,19 @@ def superseded_body(sha: str) -> str:
         f"**Automated status summary: none for the latest commit yet.** This PR's head is now `{sha}`, "
         "and its required checks haven't all passed on that commit (or couldn't be verified), "
         "so the earlier summary was removed. A new one will appear here once they pass.",
+        "",
+        "---",
+        FOOTER,
+    ])
+
+
+def blocked_body(sha: str) -> str:
+    return "\n".join([
+        f"{MARKER_PREFIX} state=blocked sha={sha} -->",
+        f"**Automated status summary: not given for commit `{sha}`.** This PR changes files under "
+        "`.github/` (GitHub Actions workflows or other repository automation). A pull request's CI runs "
+        "the workflow files from the pull request itself, so its check results can't be taken as evidence "
+        "that the usual tests ran. This needs maintainer review.",
         "",
         "---",
         FOOTER,
@@ -343,19 +385,35 @@ class Run:
         marker = MARKER_RE.match((existing or {}).get("body") or "")
         if marker and marker.groups() == ("verified", sha):
             return "already summarised for this commit"
+        if marker and marker.groups() == ("blocked", sha):
+            return "already flagged for maintainer review for this commit"
 
         try:
             results = check_results(self.api, self.repo, sha, self.required(branch))
+            files = changed_files(self.api, self.repo, pr)
         except VerificationError as exc:
             # No summary for this commit. Never leave an earlier one looking current.
             raise type(exc)(f"{exc}{self._supersede(pr, sha, existing, marker)}") from None
 
-        files, truncated = get_pages(self.api, f"/repos/{self.repo}/pulls/{pr}/files", max_pages=MAX_FILE_PAGES)
-        body = summary_body(pull, sha, branch, results, files, truncated)
+        # Green checks are not evidence for a PR that can change the workflows producing them.
+        config_changes = github_config_changes(files)
+        body = blocked_body(sha) if config_changes else summary_body(pull, sha, branch, results, files)
 
         # Last look: if a commit was pushed while we were checking, post nothing.
-        open_pull_request(self.api, self.repo, pr, sha)
+        current = open_pull_request(self.api, self.repo, pr, sha)
+        if not config_changes:
+            # A passing summary needs the whole file list: it must hold exactly as many entries as
+            # GitHub says the PR changes. This narrows, but does not close, a push-and-revert race.
+            expected = current.get("changed_files")
+            if not isinstance(expected, int) or isinstance(expected, bool) or expected != len(files):
+                raise VerificationError(
+                    f"pull request #{pr} lists {len(files)} changed files but GitHub reports "
+                    f"{expected!r}, so its changed files cannot all be checked"
+                    f"{self._supersede(pr, sha, existing, marker)}")
         self._write(pr, existing, body)
+        if config_changes:
+            return (f"no passing summary: the PR changes {config_changes} file(s) under .github/; "
+                    f"{'updated the comment to' if existing else 'posted'} a maintainer-review notice")
         return "updated the summary" if existing else "posted a summary"
 
 
