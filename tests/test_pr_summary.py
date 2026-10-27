@@ -6,9 +6,12 @@ The GitHub API is replaced by FakeGitHub, so nothing here contacts GitHub.
 from __future__ import annotations
 
 import copy
+import http.client
 import importlib.util
+import io
 import json
 import re
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -735,6 +738,66 @@ def test_run_fails_when_any_pull_request_could_not_be_verified(monkeypatch, caps
     monkeypatch.setattr(pr_summary, "GitHubAPI", lambda token, url: api)
     assert pr_summary.main({"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": REPO}) == 1
     assert "::error::#7: not verified, no summary posted" in capsys.readouterr().out
+
+
+class _DroppedWhileReading:
+    """A response whose body read fails, as when the connection drops mid-response."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self, *args):
+        raise self.error
+
+
+def _urlopen_serving(api, drop_path, error, while_reading):
+    """urlopen for the real GitHubAPI, answered from FakeGitHub; drop_path's request fails."""
+    def urlopen(request, timeout):
+        url = urllib.parse.urlsplit(request.full_url)
+        if url.path == drop_path:
+            if while_reading:
+                return _DroppedWhileReading(error)
+            raise error
+        if request.get_method() == "GET":
+            params = {k: int(v) if v.isdigit() else v for k, v in urllib.parse.parse_qsl(url.query)}
+            data = api.get(url.path, params)
+        else:
+            data = getattr(api, request.get_method().lower())(url.path, json.loads(request.data))
+        return io.BytesIO(json.dumps(data).encode("utf-8"))
+    return urlopen
+
+
+@pytest.mark.parametrize("error, while_reading", [
+    (http.client.RemoteDisconnected("Remote end closed connection without response"), False),
+    (ConnectionResetError(10054, "An existing connection was forcibly closed"), True),
+    (http.client.IncompleteRead(b'[{"id"', 512), True),
+])
+def test_a_dropped_connection_fails_only_that_pull_request(monkeypatch, capsys, error, while_reading):
+    api = FakeGitHub([_pull(7), _pull(8, sha=OTHER_SHA)])
+    monkeypatch.setattr(pr_summary.urllib.request, "urlopen",
+                        _urlopen_serving(api, f"/repos/{REPO}/issues/7/comments", error, while_reading))
+    assert pr_summary.main({"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": REPO}) == 1
+    out = capsys.readouterr().out
+    name = type(error).__name__
+    assert f"::error::#7: not verified, no summary posted: GitHub API GET /repos/{REPO}/issues/7/comments failed: {name}" in out
+    assert "#8: posted a summary" in out
+    assert [(method, pr) for method, pr, _ in api.writes] == [("POST", 8)]
+
+
+def test_a_dropped_connection_while_listing_pull_requests_stops_the_run(monkeypatch, capsys):
+    api = FakeGitHub()
+    monkeypatch.setattr(pr_summary.urllib.request, "urlopen", _urlopen_serving(
+        api, f"/repos/{REPO}/pulls", http.client.IncompleteRead(b"[", 100), while_reading=True))
+    assert pr_summary.main({"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": REPO}) == 1
+    assert ("::error::Could not list open pull requests: GitHub API GET "
+            f"/repos/{REPO}/pulls failed: IncompleteRead") in capsys.readouterr().out
+    assert api.writes == []
 
 
 def test_log_shows_outcomes_not_pull_request_text(monkeypatch, capsys):

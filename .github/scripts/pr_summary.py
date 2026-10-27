@@ -52,6 +52,7 @@ Standard library only; the workflow runs it with the runner's own python3.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -103,7 +104,9 @@ class GitHubAPI:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             raise VerificationError(f"GitHub API {method} {path} returned HTTP {exc.code}") from None
-        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        # urllib wraps only some connection failures in URLError; others, such as a connection
+        # dropped while the response is read, arrive as OSError or http.client.HTTPException.
+        except (OSError, http.client.HTTPException, ValueError) as exc:
             raise VerificationError(f"GitHub API {method} {path} failed: {type(exc).__name__}") from None
 
     def get(self, path: str, params: dict | None = None):
