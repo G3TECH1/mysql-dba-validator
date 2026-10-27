@@ -167,7 +167,7 @@ def test_summary_uses_only_github_facts_not_the_description():
 
 
 def test_same_commit_is_not_summarised_twice():
-    """Duplicate CI events and scheduled runs for an already-summarised commit do nothing."""
+    """Duplicate CI events and scheduled runs for an already-summarised commit write nothing."""
     api = FakeGitHub()
     _outcomes(api)
     assert _only_outcome(api) == ("already summarised for this commit", False)
@@ -240,6 +240,44 @@ def test_outdated_note_becomes_a_summary_once_the_head_passes():
     api.comments[7] = [{"id": 5, "user": dict(BOT), "body": _marker("superseded", SHA)}]
     assert _only_outcome(api) == ("updated the summary", False)
     assert api.comments[7][0]["body"].startswith(_marker("verified", SHA))
+
+
+def test_summary_is_replaced_when_a_newer_run_on_the_same_commit_fails():
+    """CI ran again on the summarised commit (re-run, or after reopening the PR) and failed."""
+    api = FakeGitHub()
+    _outcomes(api)
+    api.runs[SHA] = [_run(WINDOWS),
+                     _suite_run(MACOS, "success", "2026-10-27T05:52:00Z"),
+                     _suite_run(MACOS, "failure", "2026-10-27T06:16:00Z")]
+    outcome, is_error = _only_outcome(api)
+    assert not is_error and "failure" in outcome and outcome.endswith("the earlier summary was marked outdated")
+    [comment] = api.comments[7]
+    assert comment["body"].startswith(_marker("superseded", SHA))
+    assert "✅" not in comment["body"] and "passed on this commit" not in comment["body"]
+    assert [w[0] for w in api.writes] == ["POST", "PATCH"]
+
+
+def test_outdated_note_becomes_a_summary_when_a_newer_run_on_the_same_commit_passes():
+    api = FakeGitHub()
+    _outcomes(api)
+    api.runs[SHA] = [_run(WINDOWS), _suite_run(MACOS, "success", "2026-10-27T05:52:00Z"),
+                     _suite_run(MACOS, "failure", "2026-10-27T06:16:00Z")]
+    _outcomes(api)
+    api.runs[SHA].append(_suite_run(MACOS, "success", "2026-10-27T06:40:00Z"))
+    assert _only_outcome(api) == ("updated the summary", False)
+    [comment] = api.comments[7]
+    assert comment["body"].startswith(_marker("verified", SHA))
+    assert [w[0] for w in api.writes] == ["POST", "PATCH", "PATCH"]
+
+
+def test_summary_for_the_same_commit_is_updated_when_its_content_is_stale():
+    api = FakeGitHub()
+    _outcomes(api)
+    api.pulls[7]["title"] = "Renamed after the summary"
+    assert _only_outcome(api) == ("updated the summary", False)
+    [comment] = api.comments[7]
+    assert comment["body"].startswith(_marker("verified", SHA))
+    assert "Title: `Renamed after the summary`" in comment["body"]
 
 
 def test_older_summary_is_replaced_when_the_new_head_cannot_be_verified():

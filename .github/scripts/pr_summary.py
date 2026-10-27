@@ -412,12 +412,10 @@ class Run:
                 or not isinstance(branch, str) or not branch:
             raise VerificationError("an open pull request is missing its number, head commit or base branch")
 
+        # Checked again every run, even for a commit already summarised: CI can run again on the
+        # same commit (re-run, or after reopening the PR), and its newest result decides.
         existing = find_bot_comment(self.api, self.repo, pr)
         marker = MARKER_RE.match((existing or {}).get("body") or "")
-        if marker and marker.groups() == ("verified", sha):
-            return "already summarised for this commit"
-        if marker and marker.groups() == ("blocked", sha):
-            return "already flagged for maintainer review for this commit"
 
         try:
             results = check_results(self.api, self.repo, sha, self.required(branch))
@@ -441,6 +439,9 @@ class Run:
                     f"pull request #{pr} lists {len(files)} changed files but GitHub reports "
                     f"{expected!r}, so its changed files cannot all be checked"
                     f"{self._supersede(pr, sha, existing, marker)}")
+        if existing and existing.get("body") == body:
+            return ("already flagged for maintainer review for this commit" if config_changes
+                    else "already summarised for this commit")
         self._write(pr, existing, body)
         if config_changes:
             return (f"no passing summary: the PR changes {config_changes} file(s) under .github/; "
