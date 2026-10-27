@@ -94,12 +94,22 @@ from a short, fixed list. That is a design decision, not a missing feature.
 
 ## What to work on
 
+### Current open issues
+
+These issues are open and unassigned (checked 2026-10-27). Neither is a
+beginner task. Comment on the issue before you start.
+
+- [#16](https://github.com/realspinn/mysql-dba-validator/issues/16): an
+  offline regression corpus. One new test file that pins today's risk,
+  confidence and scope results. No change under `backend/`.
+- [#17](https://github.com/realspinn/mysql-dba-validator/issues/17): a
+  hands-on acceptance pass of the packaged macOS release on a real Apple
+  Silicon Mac. No code change; post the results on the issue.
+
 ### Good first contributions
 
 - Documentation fixes, especially where docs or docstrings no longer match
-  the code. For example, the header comment of `backend/db.py` still
-  describes environment-variable configuration that local evidence no longer
-  uses. A comment-only fix there is fine; changing the code is not a first
+  the code. A comment-only fix is fine; changing the code is not a first
   contribution.
 - Test cases for SQL the parser already handles, in `tests/test_parser.py`
   and `tests/test_risk_engine.py`, that pin down current behaviour. If the
@@ -109,9 +119,7 @@ from a short, fixed list. That is a design decision, not a missing feature.
 - Accessibility and usability fixes in `frontend/index.html`, such as labels,
   keyboard focus, contrast and wording, as long as they do not change what is
   sent, where it is sent or what is stored.
-- Readable messages for error codes the page shows raw. For example,
-  `database_validation_failed` from the connector has no entry in
-  `CONNECTOR_ERROR_MESSAGES`.
+- Readable messages for error codes the page shows raw.
 
 ### Intermediate contributions
 
@@ -295,9 +303,13 @@ public issue.
 
 ## Questions and good first issues
 
-Use GitHub Issues on this repository for questions, bug reports and
-proposals. Security vulnerabilities are the exception and go through
-[SECURITY.md](SECURITY.md). If you are unsure whether a change falls into a review area, ask
+Use [GitHub Issues](https://github.com/realspinn/mysql-dba-validator/issues)
+for bug reports, proposals and other specific, actionable work. For
+open-ended DBA feedback and anonymised examples of risky SQL, use
+[Discussions → General](https://github.com/realspinn/mysql-dba-validator/discussions/categories/general).
+Both are public: never post company SQL, credentials, hostnames or other
+details of a real database. Security vulnerabilities are the exception and go
+through [SECURITY.md](SECURITY.md). If you are unsure whether a change falls into a review area, ask
 before you write the code. Mention the area in the issue and describe what
 you plan to change.
 
