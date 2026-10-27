@@ -1,0 +1,57 @@
+name: PR summary
+
+# Posts one comment on each open pull request summarising its latest commit, once
+# every required check has passed on that commit. Runs on GitHub's machines after
+# every CI run and every 6 hours (to catch anything missed), so it needs nobody to
+# be online. See .github/scripts/pr_summary.py for what is checked and sent.
+#
+# workflow_run and schedule always run this file as it is on the default branch,
+# so a pull request cannot change what runs here. This job checks out only the
+# default branch and never builds, runs or downloads anything from a pull
+# request; pull request text and diffs are read through the API as data.
+#
+# The comment is posted as github-actions[bot]. It cannot approve, merge or push:
+# the token can only read the repository and checks and write pull request
+# comments, and the maintainer's approval is still required by the repository
+# rules. The summary is written by Anthropic, or OpenAI if Anthropic is not set
+# up or fails, from the pull request's title, description and diff; with neither
+# key set it is a plain file listing. Missing or invalid keys never stop the
+# checks or the comment.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  schedule:
+    - cron: "23 */6 * * *"
+
+permissions: {}
+
+# One run at a time, so two runs cannot post for the same pull request at once.
+# Each run covers every open pull request, so a queued run replacing another
+# loses nothing.
+concurrency:
+  group: pr-summary
+  cancel-in-progress: false
+
+jobs:
+  summaries:
+    name: Summarise pull requests that passed CI
+    if: github.repository == 'realspinn/mysql-dba-validator'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify required checks and post summaries
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_SUMMARY_KEY: ${{ secrets.ANTHROPIC_SUMMARY_KEY }}
+          OPENAI_SUMMARY_KEY: ${{ secrets.OPENAI_SUMMARY_KEY }}
+        run: python3 .github/scripts/pr_summary.py
