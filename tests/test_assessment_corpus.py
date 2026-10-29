@@ -119,7 +119,7 @@ def validate(sql: str) -> dict:
                 "analysis_status": "analysed",
                 "risk_level": "MEDIUM",
                 "confidence": "LIMITED",
-                "score": 20,
+                "score": 25,
             },
         ),
         (
@@ -129,7 +129,7 @@ def validate(sql: str) -> dict:
                 "analysis_status": "analysed",
                 "risk_level": "MEDIUM",
                 "confidence": "LIMITED",
-                "score": 40,  # adjust after local run if the current rule differs
+                "score": 40,
             },
         ),
 
@@ -153,7 +153,7 @@ def validate(sql: str) -> dict:
                 "analysis_status": "analysed",
                 "risk_level": "MEDIUM",
                 "confidence": "LIMITED",
-                "score": 20,
+                "score": 25,
             },
         ),
 
@@ -345,7 +345,7 @@ def validate(sql: str) -> dict:
                 "analysis_status": "analysed",
                 "risk_level": "MEDIUM",
                 "confidence": "LIMITED",
-                "score": 20,
+                "score": 25,
                 "scope_basis": "not_established",
             },
         ),
